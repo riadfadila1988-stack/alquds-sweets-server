@@ -6,7 +6,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 export function authenticateJWT(req: Request, res: Response, next: NextFunction) {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ message: 'No token provided' });
+        res.status(401).json({ message: 'No token provided' });
+        return;
     }
     const token = authHeader.split(' ')[1];
     try {
@@ -14,7 +15,8 @@ export function authenticateJWT(req: Request, res: Response, next: NextFunction)
         (req as any).user = decoded;
         next();
     } catch (err) {
-        return res.status(401).json({ message: 'Invalid token' });
+        res.status(401).json({ message: 'Invalid token' });
+        return;
     }
 }
 
@@ -22,7 +24,8 @@ export function authorizeRoles(...roles: string[]) {
     return (req: Request, res: Response, next: NextFunction) => {
         const user = (req as any).user;
         if (!user || !roles.includes(user.role)) {
-            return res.status(403).json({ message: 'Forbidden: insufficient role' });
+            res.status(403).json({ message: 'Forbidden: insufficient role' });
+            return;
         }
         next();
     };
