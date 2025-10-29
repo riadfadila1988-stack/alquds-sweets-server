@@ -20,6 +20,31 @@ class UserService {
         }
     }
 
+    // Find a single user by id
+    async findById(id: string): Promise<User | null> {
+        try {
+            return await UserModel.findById(id);
+        } catch (err) {
+            throw err;
+        }
+    }
+
+    // Update user by id (partial update)
+    async update(id: string, payload: Partial<User>): Promise<User | null> {
+        try {
+            const updateData: any = { ...payload };
+            // If password is provided, hash it
+            if (payload.password) {
+                updateData.password = await AuthService.hashPassword(payload.password);
+            }
+            // Avoid updating _id
+            delete updateData._id;
+
+            return await UserModel.findByIdAndUpdate(id, updateData, { new: true });
+        } catch (err) {
+            throw err;
+        }
+    }
 
 }
 
