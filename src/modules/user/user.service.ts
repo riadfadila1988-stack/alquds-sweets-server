@@ -12,6 +12,10 @@ class UserService {
     }
     async create(employee: User): Promise<User> {
         try {
+            // Validate password length
+            if (!employee.password || employee.password.length < 6) {
+                throw new Error('Password must be at least 6 characters');
+            }
             // Hash the password before saving
             const hashedPassword = await AuthService.hashPassword(employee.password);
             return await UserModel.create({ ...employee, password: hashedPassword, active: true, _id: undefined });
@@ -33,8 +37,11 @@ class UserService {
     async update(id: string, payload: Partial<User>): Promise<User | null> {
         try {
             const updateData: any = { ...payload };
-            // If password is provided, hash it
+            // If password is provided, validate and hash it
             if (payload.password) {
+                if (payload.password.length < 6) {
+                    throw new Error('Password must be at least 6 characters');
+                }
                 updateData.password = await AuthService.hashPassword(payload.password);
             }
             // Avoid updating _id
