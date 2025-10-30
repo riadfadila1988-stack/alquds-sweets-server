@@ -1,17 +1,26 @@
-import {Router} from "express";
+import {Router, Request, Response, NextFunction} from "express";
 import UserController from "./user.controller";
 import AuthController from './auth.controller';
-import {Request, Response} from "express";
 const router = Router();
 
-router.get('/', async (req: Request, res: Response) => await UserController.getAll(req, res));
+router.get('/', (req: Request, res: Response, next: NextFunction) => {
+    UserController.getAll(req, res).catch(next);
+});
 
-router.post('/add', async (req: Request, res: Response) => await UserController.create(req, res));
-router.post('/login', async (req: Request, res: Response) => await AuthController.login(req, res));
+router.post('/add', (req: Request, res: Response, next: NextFunction) => {
+    UserController.create(req, res).catch(next);
+});
+router.post('/login', (req: Request, res: Response, next: NextFunction) => {
+    AuthController.login(req, res).catch(next);
+});
 
 // Get single user
-router.get('/:id', async (req: Request, res: Response) => await UserController.getOne(req, res));
+router.get('/:id', (req: Request, res: Response, next: NextFunction) => {
+    UserController.getOne(req, res).catch(next);
+});
 // Update user
-router.put('/:id', async (req: Request, res: Response) => await UserController.update(req, res));
+router.put('/:id', (req: Request, res: Response, next: NextFunction) => {
+    UserController.update(req, res).catch(next);
+});
 
 export default router;
