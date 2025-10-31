@@ -65,6 +65,33 @@ class MaterialService {
         return updated;
     }
 
+    async updateMaterialQuantity(id: string, data: { quantity?: number }): Promise<IMaterial | null> {
+        const existing = await Material.findById(id);
+        if (!existing) return null;
+
+        if (typeof data.quantity === 'number') existing.quantity = data.quantity;
+
+        const updated = await existing.save();
+
+        try {
+            const q = updated.quantity ?? 0;
+            const thresh = updated.notificationThreshold ?? 0;
+            if (q <= thresh) {
+                const existingNotif = await NotificationService.findUnreadForMaterial(String(updated._id));
+                if (!existingNotif) {
+                    const messageAr = `المادة '${updated.name}' منخفضة: المتبقي ${q} (الحد الأدنى ${thresh})`;
+                    await NotificationService.createNotification(messageAr, String(updated._id));
+                }
+            } else {
+                await NotificationService.markAllReadForMaterial(String(updated._id));
+            }
+        } catch (e) {
+            console.warn('Failed to handle notification for material update', e);
+        }
+
+        return updated;
+    }
+
     async deleteMaterial(id: string): Promise<void> {
         await Material.findByIdAndDelete(id);
     }

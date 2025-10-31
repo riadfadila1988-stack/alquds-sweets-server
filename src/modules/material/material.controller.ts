@@ -29,6 +29,17 @@ class MaterialController {
         }
     }
 
+    async updateMaterialQuantity(req: Request, res: Response) {
+        try {
+            const { quantity } = req.body;
+            const material = await MaterialService.updateMaterialQuantity(req.params.id, { quantity });
+            if (!material) return res.status(404).json({ message: 'Material not found' });
+            res.status(200).json(material);
+        } catch (error: any) {
+            res.status(500).json({ message: error.message });
+        }
+    }
+
     async deleteMaterial(req: Request, res: Response) {
         try {
             await MaterialService.deleteMaterial(req.params.id);
@@ -40,4 +51,3 @@ class MaterialController {
 }
 
 export default new MaterialController();
-
