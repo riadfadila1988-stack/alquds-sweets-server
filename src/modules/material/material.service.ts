@@ -32,15 +32,25 @@ class MaterialService {
     }
 
     async updateMaterial(id: string, materialData: Partial<IMaterial>): Promise<IMaterial | null> {
-        const updated = await Material.findByIdAndUpdate(id, materialData, { new: true });
+        // Load the existing document so Mongoose `updatedAt` timestamp is applied on save
+        const existing = await Material.findById(id);
+        if (!existing) return null;
+
+        // assign provided fields
+        Object.keys(materialData).forEach((key) => {
+            // @ts-ignore
+            existing.set(key, (materialData as any)[key]);
+        });
+
+        const updated = await existing.save();
         if (!updated) return null;
 
         try {
             const q = updated.quantity ?? 0;
             const thresh = updated.notificationThreshold ?? 0;
             if (q <= thresh) {
-                const existing = await NotificationService.findUnreadForMaterial(String(updated._id));
-                if (!existing) {
+                const existingNotif = await NotificationService.findUnreadForMaterial(String(updated._id));
+                if (!existingNotif) {
                     const messageAr = `المادة '${updated.name}' منخفضة: المتبقي ${q} (الحد الأدنى ${thresh})`;
                     await NotificationService.createNotification(messageAr, String(updated._id));
                 }
