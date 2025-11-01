@@ -13,5 +13,10 @@ const NotificationSchema = new Schema<INotification>({
   data: { type: Schema.Types.Mixed, required: false },
 }, { timestamps: true });
 
+// Indexes to support common queries and avoid collection scans
+NotificationSchema.index({ recipient: 1, read: 1 });
+NotificationSchema.index({ role: 1, read: 1 });
+NotificationSchema.index({ createdAt: -1 });
+
 const Notification = model<INotification>('Notification', NotificationSchema);
 export default Notification;

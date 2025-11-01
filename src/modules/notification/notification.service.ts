@@ -55,6 +55,21 @@ class NotificationService {
     if (onlyUnread) q.read = false;
     return Notification.find(q).sort({ createdAt: -1 });
   }
+
+  // New: find a notification by id (direct DB lookup, avoids loading many docs)
+  async findById(id: string) {
+    return Notification.findById(id);
+  }
+
+  // New: mark all unread notifications for a specific user as read (by recipient)
+  async markAllReadForUser(userId: string) {
+    return Notification.updateMany({ recipient: userId, read: false }, { read: true });
+  }
+
+  // New: mark all unread notifications for a specific role as read
+  async markAllReadForRole(role: string) {
+    return Notification.updateMany({ role, read: false }, { read: true });
+  }
 }
 
 export default new NotificationService();

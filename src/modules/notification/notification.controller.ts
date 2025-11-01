@@ -39,8 +39,8 @@ class NotificationController {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: 'Unauthorized' });
       const id = req.params.id;
-      // ensure the notification is either addressed to this user or to their role
-      const found = await NotificationService.findAll().then((all: any[]) => all.find(n => String(n._id) === String(id)));
+      // efficient direct DB lookup
+      const found = await NotificationService.findById(id);
       if (!found) return res.status(404).json({ message: 'Notification not found' });
       const isRecipient = found.recipient && String(found.recipient) === String(user._id);
       const isRole = found.role && found.role === user.role;
@@ -57,16 +57,9 @@ class NotificationController {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: 'Unauthorized' });
-      // mark recipient-targeted notifications
-      await NotificationService.findUnreadForUser(String(user._id)).then((arr: any[]) => {
-        const ids = arr.map(a => a._id);
-        return Promise.all(ids.map((id: any) => NotificationService.markRead(String(id))));
-      });
-      // mark role-targeted notifications
-      await NotificationService.findUnreadForRole(user.role).then((arr: any[]) => {
-        const ids = arr.map(a => a._id);
-        return Promise.all(ids.map((id: any) => NotificationService.markRead(String(id))));
-      });
+      // Perform direct update queries to avoid loading many documents into memory (prevents OOM)
+      await NotificationService.markAllReadForUser(String(user._id));
+      await NotificationService.markAllReadForRole(user.role);
       res.status(200).json({ success: true });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
