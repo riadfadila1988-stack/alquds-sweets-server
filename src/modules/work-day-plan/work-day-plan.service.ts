@@ -69,15 +69,31 @@ class WorkDayPlanService {
       ...a,
       tasks: (a.tasks || []).map((t: any) => {
         const mapped = mapTaskNames(t);
-        // capture the raw scheduled string if provided (prefer string fields)
-        const rawStartAtString = mapped.startAtString ?? (typeof mapped.startAt === 'string' ? mapped.startAt : undefined);
-        return {
+        // capture the raw scheduled string if provided (prefer string fields). If startAt is a Date/ISO and
+        // no startAtString was provided, derive an HH:mm from the stored Date using UTC hours/minutes so the
+        // UI can display the exact stored wall-clock time without timezone conversion.
+        let rawStartAtString: any = undefined;
+        if (mapped.startAtString !== undefined && mapped.startAtString !== null) {
+          rawStartAtString = mapped.startAtString;
+        } else if (typeof mapped.startAt === 'string') {
+          rawStartAtString = mapped.startAt;
+        } else if (mapped.startAt) {
+          try {
+            const dd = new Date(mapped.startAt);
+            if (!Number.isNaN(dd.getTime())) {
+              const hh = String(dd.getUTCHours()).padStart(2, '0');
+              const mm = String(dd.getUTCMinutes()).padStart(2, '0');
+              rawStartAtString = `${hh}:${mm}`;
+            }
+          } catch {}
+        }
+         return {
           ...mapped,
           startAtString: rawStartAtString,
           startAt: parseDateOrTimeOnPlanDate(mapped && mapped.startAt),
-          startTime: parseDateOrTimeOnPlanDate(mapped && mapped.startTime),
-          endTime: parseDateOrTimeOnPlanDate(mapped && mapped.endTime),
-        };
+           startTime: parseDateOrTimeOnPlanDate(mapped && mapped.startTime),
+           endTime: parseDateOrTimeOnPlanDate(mapped && mapped.endTime),
+         };
       }),
     }));
 
