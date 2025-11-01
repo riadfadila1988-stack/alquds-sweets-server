@@ -69,8 +69,11 @@ class WorkDayPlanService {
       ...a,
       tasks: (a.tasks || []).map((t: any) => {
         const mapped = mapTaskNames(t);
+        // capture the raw scheduled string if provided (prefer string fields)
+        const rawStartAtString = mapped.startAtString ?? (typeof mapped.startAt === 'string' ? mapped.startAt : undefined);
         return {
           ...mapped,
+          startAtString: rawStartAtString,
           startAt: parseDateOrTimeOnPlanDate(mapped && mapped.startAt),
           startTime: parseDateOrTimeOnPlanDate(mapped && mapped.startTime),
           endTime: parseDateOrTimeOnPlanDate(mapped && mapped.endTime),

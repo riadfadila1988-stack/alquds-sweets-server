@@ -14,6 +14,7 @@ const TaskSimpleSchema = new Schema({
   producedMaterials: [UsedMaterialSchema], // newly added: materials produced by this task
   // Track scheduled and actual times for a task
   startAt: { type: Date },    // when the employee should start the task (scheduled)
+  startAtString: { type: String }, // original scheduled time string (e.g., '20:30')
   startTime: { type: Date },  // when the employee actually started
   endTime: { type: Date },    // when the employee actually ended
 });
