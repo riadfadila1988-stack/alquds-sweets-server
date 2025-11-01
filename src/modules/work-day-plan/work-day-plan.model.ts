@@ -12,9 +12,10 @@ const TaskSimpleSchema = new Schema({
   description: { type: String },
   usedMaterials: [UsedMaterialSchema],
   producedMaterials: [UsedMaterialSchema], // newly added: materials produced by this task
-  // Track when a task was started and ended
-  startTime: { type: Date },
-  endTime: { type: Date },
+  // Track scheduled and actual times for a task
+  startAt: { type: Date },    // when the employee should start the task (scheduled)
+  startTime: { type: Date },  // when the employee actually started
+  endTime: { type: Date },    // when the employee actually ended
 });
 
 const AssignmentSchema = new Schema({

@@ -15,10 +15,45 @@ class WorkDayPlanService {
 
   async createOrUpdate(date: string, assignments: any[]): Promise<IWorkDayPlan> {
     const d = new Date(date);
+
+    const toValidDate = (val: any) => {
+      if (val === undefined || val === null) return val;
+      const dt = new Date(val);
+      return Number.isFinite(dt.getTime()) ? dt : val;
+    };
+
+    // Map common alternative names to server canonical names before normalization
+    const mapTaskNames = (t: any) => {
+      if (!t || typeof t !== 'object') return t;
+      const mapped: any = { ...t };
+      // Scheduled start: accept startAt / scheduledStart / scheduleAt / start_at variants
+      mapped.startAt = mapped.startAt ?? mapped.scheduledStart ?? mapped.scheduleAt ?? mapped.start_at ?? mapped.scheduled_start ?? mapped.scheduled_at ?? mapped.start;
+      // Actual times: try to preserve startTime/endTime or accept alternative names
+      mapped.startTime = mapped.startTime ?? mapped.startedAt ?? mapped.start_at_time ?? mapped.started_at ?? mapped.started_at_time ?? mapped.actualStart;
+      mapped.endTime = mapped.endTime ?? mapped.endedAt ?? mapped.end_at_time ?? mapped.ended_at ?? mapped.actualEnd;
+      return mapped;
+    };
+
+    // Normalize incoming assignments: ensure task startAt/startTime/endTime (if present)
+    // are Date objects (convert from ISO strings) when valid. This avoids losing times when
+    // assigning plain objects to Mongoose subdocument arrays and prevents Invalid Date values.
+    const normalizedAssignments = (assignments || []).map((a: any) => ({
+      ...a,
+      tasks: (a.tasks || []).map((t: any) => {
+        const mapped = mapTaskNames(t);
+        return {
+          ...mapped,
+          startAt: toValidDate(mapped && mapped.startAt),
+          startTime: toValidDate(mapped && mapped.startTime),
+          endTime: toValidDate(mapped && mapped.endTime),
+        };
+      }),
+    }));
+
     let plan = await WorkDayPlan.findOne({ date: d });
     if (!plan) {
       // Creating a brand new plan; nothing to compare against, so just save
-      plan = new WorkDayPlan({ date: d, assignments });
+      plan = new WorkDayPlan({ date: d, assignments: normalizedAssignments });
       return await plan.save();
     }
 
@@ -28,7 +63,7 @@ class WorkDayPlanService {
     // Helper to normalize user id to string
     const uid = (u: any) => (u && (u._id || u)).toString();
 
-    for (const newAssign of assignments || []) {
+    for (const newAssign of normalizedAssignments || []) {
       const newUserId = uid(newAssign.user);
       const oldAssign = (oldAssignments || []).find((a: any) => uid(a.user) === newUserId);
       const newTasks = newAssign.tasks || [];
@@ -120,7 +155,7 @@ class WorkDayPlanService {
     }
 
     // Persist the updated assignments
-    plan.assignments = assignments;
+    plan.assignments = normalizedAssignments;
     return await plan.save();
   }
 

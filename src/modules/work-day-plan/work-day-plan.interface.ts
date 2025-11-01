@@ -11,8 +11,9 @@ export interface ITaskSimple {
   description?: string;
   usedMaterials?: IUsedMaterial[];
   producedMaterials?: IUsedMaterial[]; // newly added: materials produced by this task
-  startTime?: Date;
-  endTime?: Date;
+  startAt?: Date; // scheduled time when the employee should start the task
+  startTime?: Date; // actual start time when employee started
+  endTime?: Date;   // actual end time when employee finished
 }
 
 export interface IAssignment {
