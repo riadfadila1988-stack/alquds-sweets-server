@@ -16,10 +16,39 @@ class WorkDayPlanService {
   async createOrUpdate(date: string, assignments: any[]): Promise<IWorkDayPlan> {
     const d = new Date(date);
 
-    const toValidDate = (val: any) => {
+    // Helper: parse a value into a Date when possible. Accepts ISO strings, epoch numbers,
+    // or time-only strings like 'HH:mm' which are interpreted on the provided plan date `d`.
+    const parseDateOrTimeOnPlanDate = (val: any) => {
       if (val === undefined || val === null) return val;
-      const dt = new Date(val);
-      return Number.isFinite(dt.getTime()) ? dt : val;
+      // If already a Date, return if valid
+      if (val instanceof Date) return Number.isFinite(val.getTime()) ? val : val;
+      // If numeric (epoch)
+      if (typeof val === 'number' && Number.isFinite(val)) {
+        const dd = new Date(val);
+        return Number.isFinite(dd.getTime()) ? dd : val;
+      }
+      if (typeof val === 'string') {
+        // If ISO-like or timezone-inclusive, try parsing as Date
+        if (val.includes('T') || /\d{4}-\d{2}-\d{2}/.test(val)) {
+          const dd = new Date(val);
+          if (Number.isFinite(dd.getTime())) return dd;
+        }
+        // Accept 'HH:mm' (optionally with seconds) and interpret on plan date
+        const hhmm = /^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$/.exec(val);
+        if (hhmm) {
+          const hh = Number(hhmm[1]);
+          const mm = Number(hhmm[2]);
+          const ss = hhmm[3] ? Number(hhmm[3]) : 0;
+          if (hh >= 0 && hh < 24 && mm >= 0 && mm < 60 && ss >= 0 && ss < 60) {
+            const combined = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm, ss, 0);
+            return combined;
+          }
+        }
+        // Fallback: try generic Date parse
+        const dd2 = new Date(val);
+        if (Number.isFinite(dd2.getTime())) return dd2;
+      }
+      return val;
     };
 
     // Map common alternative names to server canonical names before normalization
@@ -35,17 +64,16 @@ class WorkDayPlanService {
     };
 
     // Normalize incoming assignments: ensure task startAt/startTime/endTime (if present)
-    // are Date objects (convert from ISO strings) when valid. This avoids losing times when
-    // assigning plain objects to Mongoose subdocument arrays and prevents Invalid Date values.
+    // are Date objects (convert from ISO strings or 'HH:mm' when possible) relative to plan date `d`.
     const normalizedAssignments = (assignments || []).map((a: any) => ({
       ...a,
       tasks: (a.tasks || []).map((t: any) => {
         const mapped = mapTaskNames(t);
         return {
           ...mapped,
-          startAt: toValidDate(mapped && mapped.startAt),
-          startTime: toValidDate(mapped && mapped.startTime),
-          endTime: toValidDate(mapped && mapped.endTime),
+          startAt: parseDateOrTimeOnPlanDate(mapped && mapped.startAt),
+          startTime: parseDateOrTimeOnPlanDate(mapped && mapped.startTime),
+          endTime: parseDateOrTimeOnPlanDate(mapped && mapped.endTime),
         };
       }),
     }));
