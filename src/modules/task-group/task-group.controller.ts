@@ -26,6 +26,9 @@ class TaskGroupController extends BaseController {
 
   async create(req: Request, res: Response) {
     try {
+      if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') {
+        try { console.log('[TaskGroupController] create body', JSON.stringify(req.body)); } catch (e) {}
+      }
       const data = await this.taskGroupService.create(req.body);
       res.status(201).json(data);
     } catch (error: any) {
@@ -35,6 +38,9 @@ class TaskGroupController extends BaseController {
 
   async update(req: Request, res: Response) {
     try {
+      if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV !== 'production') {
+        try { console.log('[TaskGroupController] update body', JSON.stringify(req.body)); } catch (e) {}
+      }
       const data = await this.taskGroupService.update(req.params.id, req.body);
       res.status(200).json(data);
     } catch (error: any) {
