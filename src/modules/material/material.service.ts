@@ -3,8 +3,11 @@ import { IMaterial } from './material.interface';
 import NotificationService from '../notification/notification.service';
 
 class MaterialService {
-    async getAllMaterials(): Promise<IMaterial[]> {
-        return Material.find();
+    async getAllMaterials(limit = 100, page = 1): Promise<IMaterial[]> {
+        const capped = Math.max(1, Math.min(1000, Number(limit)));
+        const p = Math.max(1, Number(page));
+        const skip = (p - 1) * capped;
+        return Material.find().skip(skip).limit(capped).lean();
     }
 
     async createMaterial(materialData: IMaterial): Promise<IMaterial> {

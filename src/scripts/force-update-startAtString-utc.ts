@@ -6,12 +6,15 @@ function pad(n: number) { return String(n).padStart(2, '0'); }
 async function run() {
   await connectDB();
   console.log('[force-backfill] connected to DB');
-  const plans = await WorkDayPlan.find();
-  console.log('[force-backfill] found', plans.length, 'plans');
+
+  // Use a cursor to process plans one at a time
+  const cursor = WorkDayPlan.find().cursor();
   let updatedPlans = 0;
   let updatedTasks = 0;
+  let processed = 0;
 
-  for (const plan of plans) {
+  for (let plan = await cursor.next(); plan != null; plan = await cursor.next()) {
+    processed++;
     let changed = false;
     const assignments = plan.assignments || [];
     for (const a of assignments) {
@@ -45,9 +48,11 @@ async function run() {
         console.error('[force-backfill] failed to save plan', String(plan._id), err);
       }
     }
+
+    if (processed % 100 === 0) await new Promise((r) => setTimeout(r, 0));
   }
 
-  console.log('[force-backfill] done. plansUpdated=', updatedPlans, 'tasksUpdated=', updatedTasks);
+  console.log('[force-backfill] done. processed=', processed, 'plansUpdated=', updatedPlans, 'tasksUpdated=', updatedTasks);
   process.exit(0);
 }
 
@@ -55,4 +60,3 @@ run().catch((e) => {
   console.error('[force-backfill] error', e);
   process.exit(1);
 });
-

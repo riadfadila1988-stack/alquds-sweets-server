@@ -3,9 +3,12 @@ import UserModel from "./user.model";
 import AuthService from './auth.service';
 
 class UserService {
-    async findAll(): Promise<User[]> {
+    async findAll(limit = 100, page = 1): Promise<User[]> {
         try {
-            return await UserModel.find();
+            const capped = Math.max(1, Math.min(1000, Number(limit)));
+            const p = Math.max(1, Number(page));
+            const skip = (p - 1) * capped;
+            return await UserModel.find().skip(skip).limit(capped).lean();
         } catch (err) {
             throw err;
         }
@@ -27,7 +30,7 @@ class UserService {
     // Find a single user by id
     async findById(id: string): Promise<User | null> {
         try {
-            return await UserModel.findById(id);
+            return await UserModel.findById(id).lean();
         } catch (err) {
             throw err;
         }

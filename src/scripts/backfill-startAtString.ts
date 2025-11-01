@@ -8,12 +8,15 @@ function pad(n: number) {
 async function run() {
   await connectDB();
   console.log('[backfill] connected to DB');
-  const plans = await WorkDayPlan.find();
-  console.log('[backfill] found', plans.length, 'plans');
+
+  // Use a cursor to avoid loading all plans into memory at once
+  const cursor = WorkDayPlan.find().cursor();
   let updatedPlans = 0;
   let updatedTasks = 0;
+  let processed = 0;
 
-  for (const plan of plans) {
+  for (let plan = await cursor.next(); plan != null; plan = await cursor.next()) {
+    processed++;
     let changed = false;
     const assignments = plan.assignments || [];
     for (const a of assignments) {
@@ -46,9 +49,12 @@ async function run() {
         console.error('[backfill] failed to save plan', String(plan._id), err);
       }
     }
+
+    // periodically yield to the event loop to keep memory low
+    if (processed % 100 === 0) await new Promise((r) => setTimeout(r, 0));
   }
 
-  console.log('[backfill] done. plansUpdated=', updatedPlans, 'tasksUpdated=', updatedTasks);
+  console.log('[backfill] done. processed=', processed, 'plansUpdated=', updatedPlans, 'tasksUpdated=', updatedTasks);
   process.exit(0);
 }
 
@@ -56,4 +62,3 @@ run().catch((e) => {
   console.error('[backfill] error', e);
   process.exit(1);
 });
-
