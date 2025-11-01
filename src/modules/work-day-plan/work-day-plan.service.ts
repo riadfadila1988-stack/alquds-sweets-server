@@ -6,11 +6,15 @@ import NotificationService from '../notification/notification.service';
 class WorkDayPlanService {
   async getByDate(date: string): Promise<IWorkDayPlan | null> {
     const d = new Date(date);
-    return await WorkDayPlan.findOne({ date: d }).populate('assignments.user');
+    return await WorkDayPlan.findOne({ date: d }).populate('assignments.user').lean();
   }
 
-  async getAll(): Promise<IWorkDayPlan[]> {
-    return await WorkDayPlan.find().populate('assignments.user');
+  // Make getAll paginated and lean to avoid returning the entire collection into memory
+  async getAll(limit = 100, page = 1): Promise<IWorkDayPlan[]> {
+    const capped = Math.max(1, Math.min(1000, Number(limit)));
+    const p = Math.max(1, Number(page));
+    const skip = (p - 1) * capped;
+    return await WorkDayPlan.find().skip(skip).limit(capped).populate('assignments.user').lean();
   }
 
   async createOrUpdate(date: string, assignments: any[]): Promise<IWorkDayPlan> {

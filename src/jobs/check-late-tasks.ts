@@ -16,12 +16,15 @@ async function checkLateTasksOnce() {
     const today = new Date();
     // Normalize to server date-only (midnight)
     const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    // Query plans whose date equals startOfDay
-    const plans = await WorkDayPlan.find({ date: startOfDay }).populate('assignments.user');
+    // Use a cursor to stream matching plans to avoid loading all into memory
+    const cursor = WorkDayPlan.find({ date: startOfDay }).cursor();
 
     const now = new Date();
 
-    for (const plan of plans) {
+    for (let plan = await cursor.next(); plan != null; plan = await cursor.next()) {
+      // populate assignments.user for this single plan only
+      await plan.populate('assignments.user');
+
       let modified = false;
       for (const assign of (plan.assignments || [])) {
         const user = assign.user as any;
@@ -82,6 +85,9 @@ async function checkLateTasksOnce() {
           console.error('[LateTaskJob] failed to save updated plan', e);
         }
       }
+
+      // yield periodically
+      await new Promise((r) => setTimeout(r, 0));
     }
   } catch (err) {
     console.error('[LateTaskJob] unexpected error', err);
