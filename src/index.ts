@@ -23,5 +23,15 @@ io.on("connection", (socket) => {
 connectDB().then(() => {
     server.listen(PORT, () => {
         console.log(`🚀 Server running on http://localhost:${PORT}`);
+
+        // start background jobs after server & DB are up
+        try {
+          const jobs = require('./jobs/check-late-tasks');
+          if (jobs && typeof jobs.startLateTaskChecker === 'function') {
+            jobs.startLateTaskChecker();
+          }
+        } catch (e) {
+          console.error('Failed to start background jobs', e);
+        }
     });
 });

@@ -6,6 +6,7 @@ export interface IUsedMaterial {
 }
 
 export interface ITaskSimple {
+  _id?: any;
   name: string;
   duration?: number;
   description?: string;
@@ -15,6 +16,8 @@ export interface ITaskSimple {
   startAtString?: string; // original scheduled time string (e.g., '20:30')
   startTime?: Date; // actual start time when employee started
   endTime?: Date;   // actual end time when employee finished
+  // server helper flag to avoid duplicate late notifications
+  lateNotified?: boolean;
 }
 
 export interface IAssignment {

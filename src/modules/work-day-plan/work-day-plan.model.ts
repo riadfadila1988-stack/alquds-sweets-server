@@ -17,6 +17,8 @@ const TaskSimpleSchema = new Schema({
   startAtString: { type: String }, // original scheduled time string (e.g., '20:30')
   startTime: { type: Date },  // when the employee actually started
   endTime: { type: Date },    // when the employee actually ended
+  // Server-side helper flag to avoid duplicate late notifications
+  lateNotified: { type: Boolean, default: false },
 });
 
 const AssignmentSchema = new Schema({
