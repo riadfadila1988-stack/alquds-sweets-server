@@ -25,6 +25,20 @@ async function checkLateTasksOnce() {
 
     const now = new Date();
 
+    // Log server time and relevant environment settings for debugging notification timing differences
+    try {
+      const serverTZ = (typeof Intl !== 'undefined' && Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions)
+        ? Intl.DateTimeFormat().resolvedOptions().timeZone
+        : undefined;
+      console.log('[LateTaskJob] server now (ISO)=', now.toISOString(), 'server now (local)=', now.toString());
+      console.log('[LateTaskJob] server timezone offset (minutes)=', now.getTimezoneOffset(), 'detected IANA tz=', serverTZ, 'process.env.TZ=', process.env.TZ);
+      console.log('[LateTaskJob] env NOTIFY_TZ=', process.env.NOTIFY_TZ, 'NOTIFY_SHIFT_MINUTES=', process.env.NOTIFY_SHIFT_MINUTES, 'LATE_GRACE_MINUTES=', process.env.LATE_GRACE_MINUTES, 'LATE_CHECK_INTERVAL_MS=', process.env.LATE_CHECK_INTERVAL_MS);
+    } catch (e) {
+      // defensive: logging should not break the job
+      // eslint-disable-next-line no-console
+      console.error('[LateTaskJob] failed to log server time/env', e);
+    }
+
     for (let plan = await cursor.next(); plan != null; plan = await cursor.next()) {
       // populate assignments.user for this single plan only
       await plan.populate('assignments.user');
@@ -81,6 +95,17 @@ async function checkLateTasksOnce() {
           const shiftMinutes = Number(process.env.NOTIFY_SHIFT_MINUTES || '0');
           if (shiftMinutes !== 0) {
             scheduledDate = new Date(scheduledDate.getTime() + shiftMinutes * 60 * 1000);
+          }
+
+          // Debug: log scheduled vs server time and the difference in minutes
+          try {
+            const scheduledIso = scheduledDate.toISOString();
+            const diffMs = scheduledDate.getTime() - now.getTime();
+            const diffMin = Math.round(diffMs / 60000);
+            const tzUsed = ((task as any) && (task as any).timezone) || process.env.NOTIFY_TZ || 'server-local';
+            console.log('[LateTaskJob] plan=', String(plan._id), 'task=', String(task._id), 'user=', String(userId || 'unknown'), 'startAtString=', task.startAtString, 'tz=', tzUsed, 'shiftMinutes=', shiftMinutes, 'scheduled=', scheduledIso, 'diffMinutesFromServer=', diffMin);
+          } catch (e) {
+            console.error('[LateTaskJob] failed to log task schedule debug info', e);
           }
 
           // Compute cutoff using scheduledDate (absolute time representing the intended wall-clock)
