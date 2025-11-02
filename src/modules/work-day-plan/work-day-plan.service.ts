@@ -44,6 +44,9 @@ class WorkDayPlanService {
           const mm = Number(hhmm[2]);
           const ss = hhmm[3] ? Number(hhmm[3]) : 0;
           if (hh >= 0 && hh < 24 && mm >= 0 && mm < 60 && ss >= 0 && ss < 60) {
+            // Interpret time as local wall-clock time on the plan date (server local timezone).
+            // Using the local Date constructor ensures comparisons with `new Date()` happen at the
+            // expected local time rather than shifted by UTC offset.
             const combined = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm, ss, 0);
             return combined;
           }
@@ -85,8 +88,9 @@ class WorkDayPlanService {
           try {
             const dd = new Date(mapped.startAt);
             if (!Number.isNaN(dd.getTime())) {
-              const hh = String(dd.getUTCHours()).padStart(2, '0');
-              const mm = String(dd.getUTCMinutes()).padStart(2, '0');
+              // Use local hours/minutes so the UI reflects the stored wall-clock time
+              const hh = String(dd.getHours()).padStart(2, '0');
+              const mm = String(dd.getMinutes()).padStart(2, '0');
               rawStartAtString = `${hh}:${mm}`;
             }
           } catch {}
