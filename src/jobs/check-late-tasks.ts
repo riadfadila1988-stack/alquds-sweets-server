@@ -74,18 +74,20 @@ async function checkLateTasksOnce() {
           // not yet started, and not already notified
           // More explicit null/undefined checks to avoid edge cases
           if (!task.startAt && !task.startAtString) {
-            console.log('[LateTaskJob] WARNING: Task has no scheduled start time', { 
-              taskId: task._id,
-              taskName: task.name,
-              userName,
-              planDate: plan.date?.toISOString?.(),
-              taskData: {
-                startAt: task.startAt,
-                startAtString: task.startAtString,
-                startTime: task.startTime,
-                endTime: task.endTime
-              }
-            });
+            if (LATE_JOB_VERBOSE) {
+              console.log('[LateTaskJob][VERBOSE] Task has no scheduled start time (skipping)', { 
+                taskId: task._id,
+                taskName: task.name,
+                userName,
+                planDate: plan.date?.toISOString?.(),
+                taskData: {
+                  startAt: task.startAt,
+                  startAtString: task.startAtString,
+                  startTime: task.startTime,
+                  endTime: task.endTime
+                }
+              });
+            }
             continue;
           }
           // Check if task has already been started - must be explicit to handle all cases
