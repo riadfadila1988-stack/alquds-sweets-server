@@ -109,6 +109,9 @@ async function checkLateTasksOnce() {
           // Construct scheduledDate using DateTime.fromObject with zone so notifications fire at the user's local intended time.
           let scheduledDate: Date | null = null;
           if (task.startAtString && typeof task.startAtString === 'string') {
+            if (LATE_JOB_VERBOSE) {
+              console.log('[LateTaskJob][VERBOSE] parsing startAtString', { startAtString: task.startAtString, planDate: plan.date?.toISOString?.() });
+            }
             const m = /^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$/.exec(task.startAtString);
             if (m) {
               const hh = Number(m[1]);
@@ -118,20 +121,39 @@ async function checkLateTasksOnce() {
               // Prefer per-task timezone, then configured NOTIFY_TZ, then detected server tz, then UTC.
               // Use the defaultNotifyTZ computed earlier so the same value logged is actually applied here.
               const tz = ((task as any) && (task as any).timezone) || defaultNotifyTZ;
+              if (LATE_JOB_VERBOSE) {
+                console.log('[LateTaskJob][VERBOSE] timezone for parsing', { tz, hh, mm, ss });
+              }
               if (tz) {
                 // Interpret the plan.date in the chosen zone, then set the wall-clock time (hh:mm:ss) there.
                 // This avoids mistakes when plan.date is stored as midnight UTC but the intended local date is different.
-                const planDt = DateTime.fromJSDate(plan.date, { zone: tz });
-                const dt = planDt.set({ hour: hh, minute: mm, second: ss, millisecond: 0 });
-                if (dt.isValid) scheduledDate = dt.toJSDate();
+                try {
+                  const planDt = DateTime.fromJSDate(plan.date, { zone: tz });
+                  const dt = planDt.set({ hour: hh, minute: mm, second: ss, millisecond: 0 });
+                  if (dt.isValid) {
+                    scheduledDate = dt.toJSDate();
+                    if (LATE_JOB_VERBOSE) {
+                      console.log('[LateTaskJob][VERBOSE] successfully parsed scheduledDate from startAtString', { scheduledDate: scheduledDate?.toISOString?.() });
+                    }
+                  } else {
+                    console.error('[LateTaskJob] ERROR: Luxon DateTime is invalid', { planDt: planDt.toISO?.(), dt: dt.toISO?.(), tz, hh, mm, ss });
+                  }
+                } catch (err) {
+                  console.error('[LateTaskJob] ERROR: Failed to parse with Luxon', { err, tz, planDate: plan.date, hh, mm, ss });
+                }
               } else {
                 // No zone provided: interpret as server-local wall-clock
                 scheduledDate = new Date(plan.date.getFullYear(), plan.date.getMonth(), plan.date.getDate(), hh, mm, ss, 0);
               }
+            } else if (LATE_JOB_VERBOSE) {
+              console.log('[LateTaskJob][VERBOSE] startAtString did not match HH:mm pattern', { startAtString: task.startAtString });
             }
           }
           if (!scheduledDate && task.startAt) {
             scheduledDate = new Date(task.startAt);
+            if (LATE_JOB_VERBOSE) {
+              console.log('[LateTaskJob][VERBOSE] using task.startAt as fallback', { startAt: task.startAt, scheduledDate: scheduledDate?.toISOString?.() });
+            }
           }
           if (LATE_JOB_VERBOSE) {
             console.log('[LateTaskJob][VERBOSE] computed scheduledDate', { scheduledDate: scheduledDate?.toISOString?.(), planDate: plan.date?.toISOString?.(), defaultNotifyTZ });
