@@ -30,11 +30,24 @@ class NotificationService {
   // New helpers
   // Paginated find for admin listing to avoid loading the full collection into memory.
   // options: page (1-based), limit, onlyUnread, includeData
-  async findPaged(options?: { page?: number; limit?: number; onlyUnread?: boolean; includeData?: boolean }) {
+  async findPaged(options?: { page?: number; limit?: number; onlyUnread?: boolean; includeData?: boolean; excludeRoles?: string[]; excludeRecipient?: boolean }) {
     const page = Math.max(1, Number(options?.page) || 1);
     const limit = Math.max(1, Math.min(1000, Number(options?.limit) || 50));
     const q: any = {};
+    // onlyUnread filter
     if (options?.onlyUnread) q.read = false;
+
+    // Optionally exclude notifications that are targeted to specific roles (e.g. 'employee')
+    if (options?.excludeRoles && Array.isArray(options.excludeRoles) && options.excludeRoles.length > 0) {
+      // role may be undefined for general admin notifications; $nin allows undefined to pass
+      q.role = { $nin: options.excludeRoles };
+    }
+
+    // Optionally exclude recipient-targeted notifications (those with a recipient field)
+    if (options?.excludeRecipient) {
+      q.recipient = { $exists: false };
+    }
+
     const skip = (page - 1) * limit;
 
     const query = Notification.find(q).sort({ createdAt: -1 }).skip(skip).limit(limit).lean();

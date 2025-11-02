@@ -8,7 +8,9 @@ class NotificationController {
       const page = req.query.page ? Number(req.query.page) : 1;
       const limit = req.query.limit ? Number(req.query.limit) : 50;
       const onlyUnread = req.query.unread === '1' || req.query.unread === 'true';
-      const result = await NotificationService.findPaged({ page, limit, onlyUnread });
+      // Exclude notifications that are targeted to individual recipients or to the 'employee' role
+      // so admin listing only shows admin/global notifications.
+      const result = await NotificationService.findPaged({ page, limit, onlyUnread, excludeRoles: ['employee'], excludeRecipient: true });
       res.status(200).json(result);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
