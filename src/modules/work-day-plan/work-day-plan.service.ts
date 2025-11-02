@@ -2,6 +2,9 @@ import { WorkDayPlan } from './work-day-plan.model';
 import { IWorkDayPlan } from './work-day-plan.interface';
 import Material from '../material/material.model';
 import NotificationService from '../notification/notification.service';
+// Luxon for timezone-aware conversions
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { DateTime } = require('luxon');
 
 class WorkDayPlanService {
   async getByDate(date: string): Promise<IWorkDayPlan | null> {
@@ -44,11 +47,18 @@ class WorkDayPlanService {
           const mm = Number(hhmm[2]);
           const ss = hhmm[3] ? Number(hhmm[3]) : 0;
           if (hh >= 0 && hh < 24 && mm >= 0 && mm < 60 && ss >= 0 && ss < 60) {
-            // Interpret time as local wall-clock time on the plan date (server local timezone).
-            // Using the local Date constructor ensures comparisons with `new Date()` happen at the
-            // expected local time rather than shifted by UTC offset.
-            const combined = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm, ss, 0);
-            return combined;
+            // Determine timezone to interpret the user-entered wall-clock. Prefer per-task timezone
+            // (if provided by client), then server-level NOTIFY_TZ, then fall back to UTC. We then
+            // construct a Luxon DateTime on the plan date in that zone, set the wall-clock time,
+            // and return the JS Date (UTC instant). This ensures server stores an absolute UTC instant.
+            const tz = process.env.NOTIFY_TZ || 'UTC';
+            try {
+              const dt = DateTime.fromJSDate(d, { zone: tz }).set({ hour: hh, minute: mm, second: ss, millisecond: 0 });
+              if (dt.isValid) return dt.toJSDate();
+            } catch {
+              // fallback to local interpretation if Luxon fails
+              return new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm, ss, 0);
+            }
           }
         }
         // Fallback: try generic Date parse
@@ -95,13 +105,38 @@ class WorkDayPlanService {
             }
           } catch {}
         }
-         return {
+        // Compute startAt: prefer explicit startAt value if provided. If only startAtString exists,
+        // convert it into an absolute UTC Date using Luxon and the configured NOTIFY_TZ (or UTC).
+        let computedStartAt = undefined;
+        if (mapped.startAt) {
+          // If client sent an ISO string, number, or Date, parse it to Date
+          computedStartAt = parseDateOrTimeOnPlanDate(mapped.startAt);
+        } else if (mapped.startAtString) {
+          // parse HH:mm on plan date using configured timezone
+          const m = /^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$/.exec(mapped.startAtString);
+          if (m) {
+            const hh = Number(m[1]);
+            const mm = Number(m[2]);
+            const ss = m[3] ? Number(m[3]) : 0;
+            const tz = ((mapped as any).timezone) || process.env.NOTIFY_TZ || 'UTC';
+            try {
+              const planDt = DateTime.fromJSDate(d, { zone: tz });
+              const dt = planDt.set({ hour: hh, minute: mm, second: ss, millisecond: 0 });
+              if (dt.isValid) computedStartAt = dt.toJSDate();
+            } catch {
+              // fallback to local
+              computedStartAt = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm, ss, 0);
+            }
+          }
+        }
+
+        return {
           ...mapped,
           startAtString: rawStartAtString,
-          startAt: parseDateOrTimeOnPlanDate(mapped && mapped.startAt),
-           startTime: parseDateOrTimeOnPlanDate(mapped && mapped.startTime),
-           endTime: parseDateOrTimeOnPlanDate(mapped && mapped.endTime),
-         };
+          startAt: computedStartAt,
+          startTime: parseDateOrTimeOnPlanDate(mapped && mapped.startTime),
+          endTime: parseDateOrTimeOnPlanDate(mapped && mapped.endTime),
+        };
       }),
     }));
 
