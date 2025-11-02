@@ -1,6 +1,31 @@
 import { Request, Response } from 'express';
 import NotificationService from './notification.service';
 
+function extractUserId(user: any): string | undefined {
+  if (!user) return undefined;
+  if (typeof user === 'string') return user;
+
+  const tryValue = (v: any): string | undefined => {
+    if (!v) return undefined;
+    if (typeof v === 'string') return v;
+    if (typeof v === 'object') {
+      if (typeof v.toHexString === 'function') return v.toHexString();
+      if (typeof v.toString === 'function') {
+        const s = v.toString();
+        if (s && s !== '[object Object]') return s;
+      }
+      if ((v as any)._id) {
+        const inner = (v as any)._id;
+        if (typeof inner === 'string') return inner;
+        if (typeof inner === 'object' && typeof inner.toHexString === 'function') return inner.toHexString();
+      }
+    }
+    return undefined;
+  };
+
+  return tryValue(user._id) || tryValue(user.id) || tryValue(user);
+}
+
 class NotificationController {
   async getAllNotifications(req: Request, res: Response) {
     try {
@@ -29,12 +54,16 @@ class NotificationController {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: 'Unauthorized' });
       const onlyUnread = req.query.unread === '1' || req.query.unread === 'true';
-      // Determine role: prefer authenticated user.role, fall back to roles array or explicit query param
-      const roleFromQuery = req.query.role ? String(req.query.role) : undefined;
-      const role = roleFromQuery || user.role || (Array.isArray(user.roles) && user.roles.length > 0 ? String(user.roles[0]) : undefined);
 
-      const notifications = await NotificationService.findForUser(String(user._id || user), role, onlyUnread, { limit: 200 });
-      console.log('[Notification] getForCurrentUser: user=', { id: user._id || user, role }, 'returned=', Array.isArray(notifications) ? notifications.length : 0);
+      const userId = extractUserId(user);
+      if (!userId) return res.status(401).json({ message: 'Unauthorized: missing user id' });
+
+      // Determine role: prefer explicit query param, then token role, then roles array
+      const roleFromQuery = req.query.role ? String(req.query.role) : undefined;
+      const role = roleFromQuery || (typeof user === 'object' ? user.role : undefined) || (Array.isArray((user as any).roles) && (user as any).roles.length > 0 ? String((user as any).roles[0]) : undefined);
+
+      const notifications = await NotificationService.findForUser(userId, role, onlyUnread, { limit: 200 });
+      console.log('[Notification] getForCurrentUser: user=', { id: userId, role }, 'returned=', Array.isArray(notifications) ? notifications.length : 0);
       res.status(200).json(notifications);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -57,11 +86,15 @@ class NotificationController {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: 'Unauthorized' });
       const id = req.params.id;
+      // extract userId for comparisons
+      const userId = extractUserId(user);
+      if (!userId) return res.status(401).json({ message: 'Unauthorized: missing user id' });
+
       // efficient direct DB lookup
       const found = await NotificationService.findById(id);
       if (!found) return res.status(404).json({ message: 'Notification not found' });
-      const isRecipient = found.recipient && String(found.recipient) === String(user._id);
-      const isRole = found.role && found.role === user.role;
+      const isRecipient = !!(found.recipient && String(found.recipient) === userId);
+      const isRole = !!(found.role && found.role === (typeof user === 'object' ? user.role : undefined));
       if (!isRecipient && !isRole) return res.status(403).json({ message: 'Forbidden' });
       await NotificationService.markRead(id);
       res.status(200).json({ success: true });
@@ -75,9 +108,12 @@ class NotificationController {
     try {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: 'Unauthorized' });
+      const userId = extractUserId(user);
+      if (!userId) return res.status(401).json({ message: 'Unauthorized: missing user id' });
+
       // Perform direct update queries to avoid loading many documents into memory (prevents OOM)
-      await NotificationService.markAllReadForUser(String(user._id));
-      await NotificationService.markAllReadForRole(user.role);
+      await NotificationService.markAllReadForUser(userId);
+      await NotificationService.markAllReadForRole(typeof user === 'object' ? user.role : undefined);
       res.status(200).json({ success: true });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
