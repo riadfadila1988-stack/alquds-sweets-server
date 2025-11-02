@@ -6,7 +6,7 @@ import NotificationService from '../modules/notification/notification.service';
 const { DateTime } = require('luxon');
 
 // Configuration
-const GRACE_MINUTES = Number(process.env.LATE_GRACE_MINUTES || '5');
+const GRACE_MINUTES = Number(process.env.LATE_GRACE_MINUTES || '0');
 const CHECK_INTERVAL_MS = Number(process.env.LATE_CHECK_INTERVAL_MS || String(60 * 1000)); // default every minute
 // Optional verbose debugging for the late-job. Set LATE_JOB_VERBOSE=1 to enable detailed logs.
 const LATE_JOB_VERBOSE = process.env.LATE_JOB_VERBOSE === '1' || process.env.LATE_JOB_VERBOSE === 'true';
