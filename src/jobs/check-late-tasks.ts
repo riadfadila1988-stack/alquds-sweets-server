@@ -5,9 +5,9 @@ import NotificationService from '../modules/notification/notification.service';
 const GRACE_MINUTES = Number(process.env.LATE_GRACE_MINUTES || '5');
 const CHECK_INTERVAL_MS = Number(process.env.LATE_CHECK_INTERVAL_MS || String(60 * 1000)); // default every minute
 
-function formatTimeUTC(d: Date) {
-  const hh = String(d.getUTCHours()).padStart(2, '0');
-  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+function formatTimeLocal(d: Date) {
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
   return `${hh}:${mm}`;
 }
 
@@ -32,19 +32,49 @@ async function checkLateTasksOnce() {
         const userName = user && user.name ? user.name : (userId || 'Unknown');
 
         for (const task of (assign.tasks || [])) {
-          // Only consider tasks with scheduled start, not yet started, and not already notified
-          if (!task.startAt) continue;
+          // Only consider tasks with scheduled start (either stored startAt Date or startAtString),
+          // not yet started, and not already notified
+          if (!task.startAt && !task.startAtString) continue;
           if (task.startTime) continue;
           if (task.lateNotified) continue;
 
-          // Compute cutoff
-          const cutoff = new Date(task.startAt.getTime() + GRACE_MINUTES * 60 * 1000);
+          // Compute scheduledDate: prefer startAtString (HH:mm) interpreted on plan date as local time
+          let scheduledDate: Date | null = null;
+          if (task.startAtString && typeof task.startAtString === 'string') {
+            const m = /^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$/.exec(task.startAtString);
+            if (m) {
+              const hh = Number(m[1]);
+              const mm = Number(m[2]);
+              const ss = m[3] ? Number(m[3]) : 0;
+              // If NOTIFY_TZ_OFFSET_MINUTES is set (e.g., 120 for UTC+2), interpret the HH:mm as that timezone's
+              // wall-clock time by constructing an explicit UTC Date for that local time. This makes notifications
+              // fire at the intended local time even when the server runs in UTC.
+              const tzOffsetMin = Number(process.env.NOTIFY_TZ_OFFSET_MINUTES || '0');
+              if (tzOffsetMin !== 0) {
+                const offsetHours = Math.trunc(tzOffsetMin / 60);
+                const offsetMinRemainder = tzOffsetMin % 60;
+                // to get UTC time for local hh:mm at target tz, subtract the tz offset
+                scheduledDate = new Date(Date.UTC(plan.date.getFullYear(), plan.date.getMonth(), plan.date.getDate(), hh - offsetHours, mm - offsetMinRemainder, ss, 0));
+              } else {
+                // default: interpret HH:mm as server-local wall-clock
+                scheduledDate = new Date(plan.date.getFullYear(), plan.date.getMonth(), plan.date.getDate(), hh, mm, ss, 0);
+              }
+            }
+          }
+          if (!scheduledDate && task.startAt) {
+            scheduledDate = new Date(task.startAt);
+          }
+          if (!scheduledDate) continue; // should not happen due to earlier guard
+
+          // Compute cutoff using scheduledDate (absolute time representing the intended wall-clock)
+          const cutoff = new Date(scheduledDate.getTime() + GRACE_MINUTES * 60 * 1000);
           if (cutoff <= now) {
             // Mark notified locally to avoid duplicate notifications
             task.lateNotified = true;
             modified = true;
 
-            const plannedAtStr = formatTimeUTC(new Date(task.startAt));
+            // prefer showing the original startAtString if available (user-entered wall-clock)
+            const plannedAtStr = (task.startAtString && typeof task.startAtString === 'string') ? task.startAtString : formatTimeLocal(new Date(scheduledDate));
 
             // Employee notification (Arabic) targeted to user
             const empMsg = `أنت متأخر عن المهمة "${task.name || 'مهمة'}" المقررة في ${plannedAtStr}`;
