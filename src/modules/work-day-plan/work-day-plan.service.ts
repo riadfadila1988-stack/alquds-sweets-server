@@ -48,10 +48,9 @@ class WorkDayPlanService {
           const ss = hhmm[3] ? Number(hhmm[3]) : 0;
           if (hh >= 0 && hh < 24 && mm >= 0 && mm < 60 && ss >= 0 && ss < 60) {
             // Determine timezone to interpret the user-entered wall-clock. Prefer per-task timezone
-            // (if provided by client), then server-level NOTIFY_TZ, then fall back to UTC. We then
-            // construct a Luxon DateTime on the plan date in that zone, set the wall-clock time,
-            // and return the JS Date (UTC instant). This ensures server stores an absolute UTC instant.
-            const tz = process.env.NOTIFY_TZ || 'UTC';
+            // (if provided by client), then server-level NOTIFY_TZ, then fall back to Asia/Jerusalem.
+            // This MUST match the fallback in check-late-tasks.ts to avoid timezone mismatches.
+            const tz = process.env.NOTIFY_TZ || 'Asia/Jerusalem';
             try {
               const dt = DateTime.fromJSDate(d, { zone: tz }).set({ hour: hh, minute: mm, second: ss, millisecond: 0 });
               if (dt.isValid) return dt.toJSDate();
@@ -118,7 +117,7 @@ class WorkDayPlanService {
             const hh = Number(m[1]);
             const mm = Number(m[2]);
             const ss = m[3] ? Number(m[3]) : 0;
-            const tz = ((mapped as any).timezone) || process.env.NOTIFY_TZ || 'UTC';
+            const tz = ((mapped as any).timezone) || process.env.NOTIFY_TZ || 'Asia/Jerusalem';
             try {
               const planDt = DateTime.fromJSDate(d, { zone: tz });
               const dt = planDt.set({ hour: hh, minute: mm, second: ss, millisecond: 0 });
