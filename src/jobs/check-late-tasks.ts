@@ -26,7 +26,8 @@ async function checkLateTasksOnce() {
     const now = new Date();
 
     // defaultNotifyTZ is computed below (prefer env), declare in outer scope so it's visible later
-    let defaultNotifyTZ = process.env.NOTIFY_TZ;
+    // Default to Israel time if NOTIFY_TZ isn't set so server checks times as in Israel
+    let defaultNotifyTZ = process.env.NOTIFY_TZ || 'Asia/Jerusalem';
 
     // Log server time and relevant environment settings for debugging notification timing differences
     try {
@@ -35,10 +36,8 @@ async function checkLateTasksOnce() {
         : undefined;
       // Determine a default timezone to use when NOTIFY_TZ isn't set and tasks lack per-task timezone.
       // This prefers explicit env NOTIFY_TZ, then the system Intl-detected tz, then falls back to 'UTC'.
-      defaultNotifyTZ = defaultNotifyTZ || serverTZ || 'UTC';
-      console.log('[LateTaskJob] server now (ISO)=', now.toISOString(), 'server now (local)=', now.toString());
-      console.log('[LateTaskJob] server timezone offset (minutes)=', now.getTimezoneOffset(), 'detected IANA tz=', serverTZ, 'process.env.TZ=', process.env.TZ);
-      console.log('[LateTaskJob] env NOTIFY_TZ=', process.env.NOTIFY_TZ, 'defaultNotifyTZ=', defaultNotifyTZ, 'NOTIFY_SHIFT_MINUTES=', process.env.NOTIFY_SHIFT_MINUTES, 'LATE_GRACE_MINUTES=', process.env.LATE_GRACE_MINUTES, 'LATE_CHECK_INTERVAL_MS=', process.env.LATE_CHECK_INTERVAL_MS);
+      // If code above set defaultNotifyTZ from env it stays; otherwise prefer server detected tz, else keep Asia/Jerusalem
+      defaultNotifyTZ = process.env.NOTIFY_TZ || serverTZ || defaultNotifyTZ;
     } catch (e) {
       // defensive: logging should not break the job
       // eslint-disable-next-line no-console
@@ -48,14 +47,6 @@ async function checkLateTasksOnce() {
     for (let plan = await cursor.next(); plan != null; plan = await cursor.next()) {
       // populate assignments.user for this single plan only
       await plan.populate('assignments.user');
-      // Debug: log plan date that was used for matching (helps confirm how plan.date is stored)
-      try {
-        const planDate = plan.date instanceof Date ? plan.date.toISOString() : String(plan.date);
-        const planOffset = plan.date instanceof Date ? plan.date.getTimezoneOffset() : 'n/a';
-        console.log('[LateTaskJob] processing plan', String(plan._id), 'plan.date=', planDate, 'plan.date.getTimezoneOffset=', planOffset);
-      } catch (e) {
-        // ignore
-      }
 
       let modified = false;
       for (const assign of (plan.assignments || [])) {
@@ -85,15 +76,10 @@ async function checkLateTasksOnce() {
               // Use the defaultNotifyTZ computed earlier so the same value logged is actually applied here.
               const tz = ((task as any) && (task as any).timezone) || defaultNotifyTZ;
               if (tz) {
-                // Use Luxon to build a Date in the target zone then convert to JS Date (UTC instant)
-                const dt = DateTime.fromObject({
-                  year: plan.date.getFullYear(),
-                  month: plan.date.getMonth() + 1,
-                  day: plan.date.getDate(),
-                  hour: hh,
-                  minute: mm,
-                  second: ss,
-                }, { zone: tz });
+                // Interpret the plan.date in the chosen zone, then set the wall-clock time (hh:mm:ss) there.
+                // This avoids mistakes when plan.date is stored as midnight UTC but the intended local date is different.
+                const planDt = DateTime.fromJSDate(plan.date, { zone: tz });
+                const dt = planDt.set({ hour: hh, minute: mm, second: ss, millisecond: 0 });
                 if (dt.isValid) scheduledDate = dt.toJSDate();
               } else {
                 // No zone provided: interpret as server-local wall-clock
@@ -113,17 +99,6 @@ async function checkLateTasksOnce() {
             scheduledDate = new Date(scheduledDate.getTime() + shiftMinutes * 60 * 1000);
           }
 
-          // Debug: log scheduled vs server time and the difference in minutes
-          try {
-            const scheduledIso = scheduledDate.toISOString();
-            const diffMs = scheduledDate.getTime() - now.getTime();
-            const diffMin = Math.round(diffMs / 60000);
-            const tzUsed = ((task as any) && (task as any).timezone) || defaultNotifyTZ || 'server-local';
-            console.log('[LateTaskJob] plan=', String(plan._id), 'task=', String(task._id), 'user=', String(userId || 'unknown'), 'startAtString=', task.startAtString, 'tz=', tzUsed, 'shiftMinutes=', shiftMinutes, 'scheduled=', scheduledIso, 'diffMinutesFromServer=', diffMin);
-          } catch (e) {
-            console.error('[LateTaskJob] failed to log task schedule debug info', e);
-          }
-
           // Compute cutoff using scheduledDate (absolute time representing the intended wall-clock)
           const cutoff = new Date(scheduledDate.getTime() + GRACE_MINUTES * 60 * 1000);
           if (cutoff <= now) {
@@ -140,21 +115,19 @@ async function checkLateTasksOnce() {
               if (!userId) {
                 console.warn('[LateTaskJob] skipping employee notification because userId is falsy', { planId: plan._id, assign, taskId: task._id });
               } else {
-                const empN = await NotificationService.createForUser(empMsg, userId, { taskId: task._id, planId: plan._id });
-                console.log('[LateTaskJob] created employee notification', { id: empN?._id, recipient: empN?.recipient, userId, taskId: task._id });
-              }
-            } catch (e) {
-              console.error('[LateTaskJob] failed to create employee notification', e);
-            }
+                await NotificationService.createForUser(empMsg, userId, { taskId: task._id, planId: plan._id });
+               }
+             } catch (e) {
+               console.error('[LateTaskJob] failed to create employee notification', e);
+             }
 
             // Admin notification (Arabic) with employee and task details targeted to role 'admin'
             const adminMsg = `${userName} متأخر عن المهمة "${task.name || 'مهمة'}" (المقررة ${plannedAtStr})`;
             try {
-              const adminN = await NotificationService.createForRole(adminMsg, 'admin', { taskId: task._id, planId: plan._id, userId });
-              console.log('[LateTaskJob] created admin notification', { id: adminN?._id, role: adminN?.role, taskId: task._id });
-            } catch (e) {
-              console.error('[LateTaskJob] failed to create admin notification', e);
-            }
+              await NotificationService.createForRole(adminMsg, 'admin', { taskId: task._id, planId: plan._id, userId });
+             } catch (e) {
+               console.error('[LateTaskJob] failed to create admin notification', e);
+             }
 
             // Emit socket events to connected clients so UIs can react in real time
             try {
@@ -195,12 +168,5 @@ export function startLateTaskChecker() {
   // Run immediately, then on interval
   void checkLateTasksOnce();
   intervalId = setInterval(() => void checkLateTasksOnce(), CHECK_INTERVAL_MS);
-  console.log('[LateTaskJob] started, check interval ms=', CHECK_INTERVAL_MS, 'grace minutes=', GRACE_MINUTES);
-}
-
-export function stopLateTaskChecker() {
-  if (intervalId) {
-    clearInterval(intervalId);
-    intervalId = null;
-  }
+  // job started (log removed in production)
 }
