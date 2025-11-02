@@ -22,6 +22,15 @@ router.get('/stats',
   }
 );
 
+// Admin-only: debug fetch notifications by recipient id
+router.get('/recipient',
+  authenticateJWT,
+  authorizeRoles('admin'),
+  async (req: Request, res: Response) => {
+    await NotificationController.getForRecipient(req, res);
+  }
+);
+
 // Admin-only: mark single notification read
 router.put('/:id/read',
   authenticateJWT,

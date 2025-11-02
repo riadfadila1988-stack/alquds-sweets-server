@@ -49,7 +49,12 @@ async function checkLateTasksOnce() {
             // Employee notification (Arabic) targeted to user
             const empMsg = `أنت متأخر عن المهمة "${task.name || 'مهمة'}" المقررة في ${plannedAtStr}`;
             try {
-              await NotificationService.createForUser(empMsg, userId, { taskId: task._id, planId: plan._id });
+              if (!userId) {
+                console.warn('[LateTaskJob] skipping employee notification because userId is falsy', { planId: plan._id, assign, taskId: task._id });
+              } else {
+                const empN = await NotificationService.createForUser(empMsg, userId, { taskId: task._id, planId: plan._id });
+                console.log('[LateTaskJob] created employee notification', { id: empN?._id, recipient: empN?.recipient, userId, taskId: task._id });
+              }
             } catch (e) {
               console.error('[LateTaskJob] failed to create employee notification', e);
             }
@@ -57,7 +62,8 @@ async function checkLateTasksOnce() {
             // Admin notification (Arabic) with employee and task details targeted to role 'admin'
             const adminMsg = `${userName} متأخر عن المهمة "${task.name || 'مهمة'}" (المقررة ${plannedAtStr})`;
             try {
-              await NotificationService.createForRole(adminMsg, 'admin', { taskId: task._id, planId: plan._id, userId });
+              const adminN = await NotificationService.createForRole(adminMsg, 'admin', { taskId: task._id, planId: plan._id, userId });
+              console.log('[LateTaskJob] created admin notification', { id: adminN?._id, role: adminN?.role, taskId: task._id });
             } catch (e) {
               console.error('[LateTaskJob] failed to create admin notification', e);
             }

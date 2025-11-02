@@ -83,6 +83,14 @@ class NotificationService {
     return query.select(DEFAULT_PROJECTION);
   }
 
+  // Debug helper: find notifications for a specific recipient (limit to avoid huge responses)
+  async findByRecipient(recipientId: string, limit = 200, includeData = false) {
+    const capped = Math.max(1, Math.min(1000, Number(limit)));
+    const query = Notification.find({ recipient: recipientId }).sort({ createdAt: -1 }).limit(capped).lean();
+    if (includeData) return query.select('+data');
+    return query.select(DEFAULT_PROJECTION);
+  }
+
   // New: find unread for role
   async findUnreadForRole(role: string, limit = 200, includeData = false) {
     const capped = Math.max(1, Math.min(1000, Number(limit)));

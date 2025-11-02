@@ -133,6 +133,21 @@ class NotificationController {
       res.status(500).json({ message: error.message });
     }
   }
+
+  // Admin debug: get notifications for a specific recipient id
+  async getForRecipient(req: Request, res: Response) {
+    try {
+      const recipientId = String(req.query.recipientId || req.params.recipientId || '');
+      if (!recipientId) return res.status(400).json({ message: 'recipientId query param is required' });
+      const limit = req.query.limit ? Number(req.query.limit) : 200;
+      const includeData = req.query.includeData === '1' || req.query.includeData === 'true';
+      const docs = await NotificationService.findByRecipient(recipientId, limit, includeData);
+      console.log('[Notification] getForRecipient:', { recipientId, returned: Array.isArray(docs) ? docs.length : 0 });
+      res.status(200).json(docs);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  }
 }
 
 export default new NotificationController();
