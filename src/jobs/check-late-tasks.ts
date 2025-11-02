@@ -76,6 +76,13 @@ async function checkLateTasksOnce() {
           }
           if (!scheduledDate) continue; // should not happen due to earlier guard
 
+          // Optional additional shift (minutes) to postpone notifications relative to the computed scheduled time.
+          // Use env NOTIFY_SHIFT_MINUTES (can be negative). For example, set to 60 to delay by 1 hour.
+          const shiftMinutes = Number(process.env.NOTIFY_SHIFT_MINUTES || '0');
+          if (shiftMinutes !== 0) {
+            scheduledDate = new Date(scheduledDate.getTime() + shiftMinutes * 60 * 1000);
+          }
+
           // Compute cutoff using scheduledDate (absolute time representing the intended wall-clock)
           const cutoff = new Date(scheduledDate.getTime() + GRACE_MINUTES * 60 * 1000);
           if (cutoff <= now) {
