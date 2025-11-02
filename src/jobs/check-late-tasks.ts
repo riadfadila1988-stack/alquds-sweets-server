@@ -1,6 +1,10 @@
 import { WorkDayPlan } from '../modules/work-day-plan/work-day-plan.model';
 import NotificationService from '../modules/notification/notification.service';
 
+// Use runtime require for luxon to avoid TypeScript module resolution issues in some dev setups
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { DateTime } = require('luxon');
+
 // Configuration
 const GRACE_MINUTES = Number(process.env.LATE_GRACE_MINUTES || '5');
 const CHECK_INTERVAL_MS = Number(process.env.LATE_CHECK_INTERVAL_MS || String(60 * 1000)); // default every minute
@@ -39,6 +43,8 @@ async function checkLateTasksOnce() {
           if (task.lateNotified) continue;
 
           // Compute scheduledDate: prefer startAtString (HH:mm) interpreted on plan date as local time
+          // Use Luxon for timezone-aware conversion. Prefer task.timezone, then NOTIFY_TZ env var (IANA string like 'Asia/Jerusalem'), then server local.
+          // Construct scheduledDate using DateTime.fromObject with zone so notifications fire at the user's local intended time.
           let scheduledDate: Date | null = null;
           if (task.startAtString && typeof task.startAtString === 'string') {
             const m = /^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$/.exec(task.startAtString);
@@ -46,17 +52,21 @@ async function checkLateTasksOnce() {
               const hh = Number(m[1]);
               const mm = Number(m[2]);
               const ss = m[3] ? Number(m[3]) : 0;
-              // If NOTIFY_TZ_OFFSET_MINUTES is set (e.g., 120 for UTC+2), interpret the HH:mm as that timezone's
-              // wall-clock time by constructing an explicit UTC Date for that local time. This makes notifications
-              // fire at the intended local time even when the server runs in UTC.
-              const tzOffsetMin = Number(process.env.NOTIFY_TZ_OFFSET_MINUTES || '0');
-              if (tzOffsetMin !== 0) {
-                const offsetHours = Math.trunc(tzOffsetMin / 60);
-                const offsetMinRemainder = tzOffsetMin % 60;
-                // to get UTC time for local hh:mm at target tz, subtract the tz offset
-                scheduledDate = new Date(Date.UTC(plan.date.getFullYear(), plan.date.getMonth(), plan.date.getDate(), hh - offsetHours, mm - offsetMinRemainder, ss, 0));
+              // Determine zone: prefer task.timezone (IANA), then NOTIFY_TZ env var, otherwise server local
+              const tz = ((task as any) && (task as any).timezone) || process.env.NOTIFY_TZ || undefined;
+              if (tz) {
+                // Use Luxon to build a Date in the target zone then convert to JS Date (UTC instant)
+                const dt = DateTime.fromObject({
+                  year: plan.date.getFullYear(),
+                  month: plan.date.getMonth() + 1,
+                  day: plan.date.getDate(),
+                  hour: hh,
+                  minute: mm,
+                  second: ss,
+                }, { zone: tz });
+                if (dt.isValid) scheduledDate = dt.toJSDate();
               } else {
-                // default: interpret HH:mm as server-local wall-clock
+                // No zone provided: interpret as server-local wall-clock
                 scheduledDate = new Date(plan.date.getFullYear(), plan.date.getMonth(), plan.date.getDate(), hh, mm, ss, 0);
               }
             }
