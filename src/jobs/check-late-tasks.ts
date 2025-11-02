@@ -8,6 +8,8 @@ const { DateTime } = require('luxon');
 // Configuration
 const GRACE_MINUTES = Number(process.env.LATE_GRACE_MINUTES || '5');
 const CHECK_INTERVAL_MS = Number(process.env.LATE_CHECK_INTERVAL_MS || String(60 * 1000)); // default every minute
+// Optional verbose debugging for the late-job. Set LATE_JOB_VERBOSE=1 to enable detailed logs.
+const LATE_JOB_VERBOSE = process.env.LATE_JOB_VERBOSE === '1' || process.env.LATE_JOB_VERBOSE === 'true';
 
 function formatTimeLocal(d: Date) {
   const hh = String(d.getHours()).padStart(2, '0');
@@ -21,13 +23,21 @@ async function checkLateTasksOnce() {
     // Normalize to server date-only (midnight)
     const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     // Use a cursor to stream matching plans to avoid loading all into memory
-    const cursor = WorkDayPlan.find({ date: startOfDay }).cursor();
+    // Match plans whose `date` is within this server-local day. Use a half-open range
+    // [startOfDay, nextDay) instead of exact equality to avoid timezone-storage mismatches.
+    const dayEnd = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
+    const cursor = WorkDayPlan.find({ date: { $gte: startOfDay, $lt: dayEnd } }).cursor();
+    if (LATE_JOB_VERBOSE) console.log('[LateTaskJob][VERBOSE] querying plans in range', { startOfDay: startOfDay.toISOString(), dayEnd: dayEnd.toISOString() });
 
     const now = new Date();
 
     // defaultNotifyTZ is computed below (prefer env), declare in outer scope so it's visible later
     // Default to Israel time if NOTIFY_TZ isn't set so server checks times as in Israel
     let defaultNotifyTZ = process.env.NOTIFY_TZ || 'Asia/Jerusalem';
+
+    if (LATE_JOB_VERBOSE) {
+      console.log('[LateTaskJob][VERBOSE] job start', { now: now.toISOString(), startOfDay: startOfDay.toISOString(), envNotifyTZ: process.env.NOTIFY_TZ, defaultNotifyTZ });
+    }
 
     // Log server time and relevant environment settings for debugging notification timing differences
     try {
@@ -55,6 +65,9 @@ async function checkLateTasksOnce() {
         const userName = user && user.name ? user.name : (userId || 'Unknown');
 
         for (const task of (assign.tasks || [])) {
+          if (LATE_JOB_VERBOSE) {
+            console.log('[LateTaskJob][VERBOSE] checking task', { planDate: plan.date?.toISOString?.(), taskId: task._id, taskName: task.name, startAt: task.startAt?.toISOString?.(), startAtString: task.startAtString, startTime: task.startTime?.toISOString?.(), lateNotified: task.lateNotified });
+          }
           // Only consider tasks with scheduled start (either stored startAt Date or startAtString),
           // not yet started, and not already notified
           if (!task.startAt && !task.startAtString) continue;
@@ -90,6 +103,9 @@ async function checkLateTasksOnce() {
           if (!scheduledDate && task.startAt) {
             scheduledDate = new Date(task.startAt);
           }
+          if (LATE_JOB_VERBOSE) {
+            console.log('[LateTaskJob][VERBOSE] computed scheduledDate', { scheduledDate: scheduledDate?.toISOString?.(), planDate: plan.date?.toISOString?.(), defaultNotifyTZ });
+          }
           if (!scheduledDate) continue; // should not happen due to earlier guard
 
           // Optional additional shift (minutes) to postpone notifications relative to the computed scheduled time.
@@ -101,6 +117,9 @@ async function checkLateTasksOnce() {
 
           // Compute cutoff using scheduledDate (absolute time representing the intended wall-clock)
           const cutoff = new Date(scheduledDate.getTime() + GRACE_MINUTES * 60 * 1000);
+          if (LATE_JOB_VERBOSE) {
+            console.log('[LateTaskJob][VERBOSE] cutoff/now', { cutoff: cutoff.toISOString(), now: now.toISOString(), graceMinutes: GRACE_MINUTES, shiftMinutes });
+          }
           if (cutoff <= now) {
             // Mark notified locally to avoid duplicate notifications
             task.lateNotified = true;
