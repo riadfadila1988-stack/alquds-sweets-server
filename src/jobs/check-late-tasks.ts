@@ -25,14 +25,20 @@ async function checkLateTasksOnce() {
 
     const now = new Date();
 
+    // defaultNotifyTZ is computed below (prefer env), declare in outer scope so it's visible later
+    let defaultNotifyTZ = process.env.NOTIFY_TZ;
+
     // Log server time and relevant environment settings for debugging notification timing differences
     try {
       const serverTZ = (typeof Intl !== 'undefined' && Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions)
         ? Intl.DateTimeFormat().resolvedOptions().timeZone
         : undefined;
+      // Determine a default timezone to use when NOTIFY_TZ isn't set and tasks lack per-task timezone.
+      // This prefers explicit env NOTIFY_TZ, then the system Intl-detected tz, then falls back to 'UTC'.
+      defaultNotifyTZ = defaultNotifyTZ || serverTZ || 'UTC';
       console.log('[LateTaskJob] server now (ISO)=', now.toISOString(), 'server now (local)=', now.toString());
       console.log('[LateTaskJob] server timezone offset (minutes)=', now.getTimezoneOffset(), 'detected IANA tz=', serverTZ, 'process.env.TZ=', process.env.TZ);
-      console.log('[LateTaskJob] env NOTIFY_TZ=', process.env.NOTIFY_TZ, 'NOTIFY_SHIFT_MINUTES=', process.env.NOTIFY_SHIFT_MINUTES, 'LATE_GRACE_MINUTES=', process.env.LATE_GRACE_MINUTES, 'LATE_CHECK_INTERVAL_MS=', process.env.LATE_CHECK_INTERVAL_MS);
+      console.log('[LateTaskJob] env NOTIFY_TZ=', process.env.NOTIFY_TZ, 'defaultNotifyTZ=', defaultNotifyTZ, 'NOTIFY_SHIFT_MINUTES=', process.env.NOTIFY_SHIFT_MINUTES, 'LATE_GRACE_MINUTES=', process.env.LATE_GRACE_MINUTES, 'LATE_CHECK_INTERVAL_MS=', process.env.LATE_CHECK_INTERVAL_MS);
     } catch (e) {
       // defensive: logging should not break the job
       // eslint-disable-next-line no-console
@@ -42,6 +48,14 @@ async function checkLateTasksOnce() {
     for (let plan = await cursor.next(); plan != null; plan = await cursor.next()) {
       // populate assignments.user for this single plan only
       await plan.populate('assignments.user');
+      // Debug: log plan date that was used for matching (helps confirm how plan.date is stored)
+      try {
+        const planDate = plan.date instanceof Date ? plan.date.toISOString() : String(plan.date);
+        const planOffset = plan.date instanceof Date ? plan.date.getTimezoneOffset() : 'n/a';
+        console.log('[LateTaskJob] processing plan', String(plan._id), 'plan.date=', planDate, 'plan.date.getTimezoneOffset=', planOffset);
+      } catch (e) {
+        // ignore
+      }
 
       let modified = false;
       for (const assign of (plan.assignments || [])) {
@@ -67,7 +81,9 @@ async function checkLateTasksOnce() {
               const mm = Number(m[2]);
               const ss = m[3] ? Number(m[3]) : 0;
               // Determine zone: prefer task.timezone (IANA), then NOTIFY_TZ env var, otherwise server local
-              const tz = ((task as any) && (task as any).timezone) || process.env.NOTIFY_TZ || undefined;
+              // Prefer per-task timezone, then configured NOTIFY_TZ, then detected server tz, then UTC.
+              // Use the defaultNotifyTZ computed earlier so the same value logged is actually applied here.
+              const tz = ((task as any) && (task as any).timezone) || defaultNotifyTZ;
               if (tz) {
                 // Use Luxon to build a Date in the target zone then convert to JS Date (UTC instant)
                 const dt = DateTime.fromObject({
@@ -102,7 +118,7 @@ async function checkLateTasksOnce() {
             const scheduledIso = scheduledDate.toISOString();
             const diffMs = scheduledDate.getTime() - now.getTime();
             const diffMin = Math.round(diffMs / 60000);
-            const tzUsed = ((task as any) && (task as any).timezone) || process.env.NOTIFY_TZ || 'server-local';
+            const tzUsed = ((task as any) && (task as any).timezone) || defaultNotifyTZ || 'server-local';
             console.log('[LateTaskJob] plan=', String(plan._id), 'task=', String(task._id), 'user=', String(userId || 'unknown'), 'startAtString=', task.startAtString, 'tz=', tzUsed, 'shiftMinutes=', shiftMinutes, 'scheduled=', scheduledIso, 'diffMinutesFromServer=', diffMin);
           } catch (e) {
             console.error('[LateTaskJob] failed to log task schedule debug info', e);
