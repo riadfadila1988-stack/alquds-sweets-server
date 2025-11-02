@@ -13,6 +13,15 @@ router.get('/',
   }
 );
 
+// Admin-only: stats for debugging
+router.get('/stats',
+  authenticateJWT,
+  authorizeRoles('admin'),
+  async (req: Request, res: Response) => {
+    await NotificationController.getStats(req, res);
+  }
+);
+
 // Admin-only: mark single notification read
 router.put('/:id/read',
   authenticateJWT,

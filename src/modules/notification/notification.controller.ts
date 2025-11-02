@@ -8,9 +8,16 @@ class NotificationController {
       const page = req.query.page ? Number(req.query.page) : 1;
       const limit = req.query.limit ? Number(req.query.limit) : 50;
       const onlyUnread = req.query.unread === '1' || req.query.unread === 'true';
-      // Exclude notifications that are targeted to individual recipients or to the 'employee' role
-      // so admin listing only shows admin/global notifications.
-      const result = await NotificationService.findPaged({ page, limit, onlyUnread, excludeRoles: ['employee'], excludeRecipient: true });
+      // Allow admin to override exclusions via query params for debugging or special cases
+      const includeEmployee = req.query.includeEmployee === '1' || req.query.includeEmployee === 'true';
+      const includeRecipient = req.query.includeRecipient === '1' || req.query.includeRecipient === 'true';
+
+      const opts: any = { page, limit, onlyUnread };
+      if (!includeEmployee) opts.excludeRoles = ['employee'];
+      if (!includeRecipient) opts.excludeRecipient = true; // default: exclude recipient-targeted notifications
+
+      const result = await NotificationService.findPaged(opts);
+      console.log('[Notification] getAllNotifications: opts=', opts, 'returned=', Array.isArray(result) ? result.length : 0);
       res.status(200).json(result);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -22,7 +29,12 @@ class NotificationController {
       const user = (req as any).user;
       if (!user) return res.status(401).json({ message: 'Unauthorized' });
       const onlyUnread = req.query.unread === '1' || req.query.unread === 'true';
-      const notifications = await NotificationService.findForUser(String(user._id || user), user.role, onlyUnread);
+      // Determine role: prefer authenticated user.role, fall back to roles array or explicit query param
+      const roleFromQuery = req.query.role ? String(req.query.role) : undefined;
+      const role = roleFromQuery || user.role || (Array.isArray(user.roles) && user.roles.length > 0 ? String(user.roles[0]) : undefined);
+
+      const notifications = await NotificationService.findForUser(String(user._id || user), role, onlyUnread, { limit: 200 });
+      console.log('[Notification] getForCurrentUser: user=', { id: user._id || user, role }, 'returned=', Array.isArray(notifications) ? notifications.length : 0);
       res.status(200).json(notifications);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -109,6 +121,15 @@ class NotificationController {
       res.status(201).json(n);
     } catch (error: any) {
       console.error('[Notification] create error:', error?.message || error);
+      res.status(500).json({ message: error.message });
+    }
+  }
+
+  async getStats(req: Request, res: Response) {
+    try {
+      const stats = await NotificationService.getStats();
+      res.status(200).json(stats);
+    } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
   }

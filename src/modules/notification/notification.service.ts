@@ -94,8 +94,14 @@ class NotificationService {
   // New: find notifications for a user including role-based ones (optionally all or only unread)
   // Added optional pagination/limit to avoid returning huge result sets. Backwards compatible: callers can omit options.
   async findForUser(userId: string, role?: string, onlyUnread = false, options?: { page?: number; limit?: number; includeData?: boolean }) {
+    // helper to safely escape user-provided role when building a regex
+    const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
     const q: any = { $or: [{ recipient: userId }] };
-    if (role) q.$or.push({ role });
+    if (role) {
+      // match role case-insensitively to avoid missing notifications due to casing differences
+      q.$or.push({ role: { $regex: new RegExp(`^${escapeRegex(role)}$`, 'i') } });
+    }
     if (onlyUnread) q.read = false;
 
     // If pagination/limit provided, apply it. Otherwise default to a conservative limit.
@@ -123,6 +129,38 @@ class NotificationService {
   // New: mark all unread notifications for a specific role as read
   async markAllReadForRole(role: string) {
     return Notification.updateMany({ role, read: false }, { read: true });
+  }
+
+  // New: get stats for debugging — counts total, unread, by role, and recipient-targeted
+  async getStats() {
+    const total = await Notification.countDocuments({}).exec();
+    const unread = await Notification.countDocuments({ read: false }).exec();
+    const recipientTargeted = await Notification.countDocuments({ recipient: { $exists: true } }).exec();
+    const unreadRecipientTargeted = await Notification.countDocuments({ recipient: { $exists: true }, read: false }).exec();
+    // aggregate counts by role (including null/undefined role)
+    const byRoleAgg = await Notification.aggregate([
+      { $group: { _id: '$role', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+    ]).exec();
+
+    const unreadByRoleAgg = await Notification.aggregate([
+      { $match: { read: false } },
+      { $group: { _id: '$role', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+    ]).exec();
+
+    // convert aggregations to maps
+    const byRole: Record<string, number> = {};
+    for (const r of byRoleAgg) {
+      byRole[String(r._id || 'none')] = r.count;
+    }
+    const unreadByRole: Record<string, number> = {};
+    for (const r of unreadByRoleAgg) {
+      const key = r._id === undefined || r._id === null ? 'none' : String(r._id);
+      unreadByRole[key] = r.count;
+    }
+
+    return { total, unread, recipientTargeted, unreadRecipientTargeted, byRole, unreadByRole };
   }
 }
 
