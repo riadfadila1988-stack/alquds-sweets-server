@@ -20,6 +20,8 @@ function formatTimeLocal(d: Date) {
 async function checkLateTasksOnce() {
   try {
     const today = new Date();
+    console.log('[LateTaskJob] Starting late task check at', today.toISOString());
+    
     // Normalize to server date-only (midnight)
     const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     // Use a cursor to stream matching plans to avoid loading all into memory
@@ -70,9 +72,26 @@ async function checkLateTasksOnce() {
           }
           // Only consider tasks with scheduled start (either stored startAt Date or startAtString),
           // not yet started, and not already notified
-          if (!task.startAt && !task.startAtString) continue;
-          if (task.startTime) continue;
-          if (task.lateNotified) continue;
+          // More explicit null/undefined checks to avoid edge cases
+          if (!task.startAt && !task.startAtString) {
+            if (LATE_JOB_VERBOSE) {
+              console.log('[LateTaskJob][VERBOSE] skipping task - no scheduled start time', { taskId: task._id });
+            }
+            continue;
+          }
+          // Check if task has already been started - must be explicit to handle all cases
+          if (task.startTime !== null && task.startTime !== undefined) {
+            if (LATE_JOB_VERBOSE) {
+              console.log('[LateTaskJob][VERBOSE] skipping task - already started', { taskId: task._id, startTime: task.startTime });
+            }
+            continue;
+          }
+          if (task.lateNotified === true) {
+            if (LATE_JOB_VERBOSE) {
+              console.log('[LateTaskJob][VERBOSE] skipping task - already notified', { taskId: task._id });
+            }
+            continue;
+          }
 
           // Compute scheduledDate: prefer startAtString (HH:mm) interpreted on plan date as local time
           // Use Luxon for timezone-aware conversion. Prefer task.timezone, then NOTIFY_TZ env var (IANA string like 'Asia/Jerusalem'), then server local.
@@ -106,7 +125,13 @@ async function checkLateTasksOnce() {
           if (LATE_JOB_VERBOSE) {
             console.log('[LateTaskJob][VERBOSE] computed scheduledDate', { scheduledDate: scheduledDate?.toISOString?.(), planDate: plan.date?.toISOString?.(), defaultNotifyTZ });
           }
-          if (!scheduledDate) continue; // should not happen due to earlier guard
+          // Validate that we have a valid scheduledDate
+          if (!scheduledDate || isNaN(scheduledDate.getTime())) {
+            if (LATE_JOB_VERBOSE) {
+              console.log('[LateTaskJob][VERBOSE] skipping task - invalid scheduledDate', { taskId: task._id, scheduledDate });
+            }
+            continue;
+          }
 
           // Optional additional shift (minutes) to postpone notifications relative to the computed scheduled time.
           // Use env NOTIFY_SHIFT_MINUTES (can be negative). For example, set to 60 to delay by 1 hour.
@@ -118,9 +143,28 @@ async function checkLateTasksOnce() {
           // Compute cutoff using scheduledDate (absolute time representing the intended wall-clock)
           const cutoff = new Date(scheduledDate.getTime() + GRACE_MINUTES * 60 * 1000);
           if (LATE_JOB_VERBOSE) {
-            console.log('[LateTaskJob][VERBOSE] cutoff/now', { cutoff: cutoff.toISOString(), now: now.toISOString(), graceMinutes: GRACE_MINUTES, shiftMinutes });
+            console.log('[LateTaskJob][VERBOSE] cutoff/now comparison', { 
+              cutoff: cutoff.toISOString(), 
+              now: now.toISOString(), 
+              graceMinutes: GRACE_MINUTES, 
+              shiftMinutes,
+              isLate: cutoff <= now,
+              taskId: task._id,
+              taskName: task.name
+            });
           }
           if (cutoff <= now) {
+            // Task is late - send notifications
+            console.log('[LateTaskJob] Task is late and notification will be sent', {
+              taskId: task._id,
+              taskName: task.name,
+              userName,
+              scheduledDate: scheduledDate.toISOString(),
+              cutoff: cutoff.toISOString(),
+              now: now.toISOString(),
+              graceMinutes: GRACE_MINUTES
+            });
+            
             // Mark notified locally to avoid duplicate notifications
             task.lateNotified = true;
             modified = true;
