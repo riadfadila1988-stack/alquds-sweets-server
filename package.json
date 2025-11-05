@@ -7,7 +7,7 @@
     "dev": "ts-node-dev --respawn src/index.ts",
     "start": "node dist/index.js",
     "prestart": "npm run build",
-    "build": "tsc"
+    "build": "npx tsc"
   },
   "keywords": [],
   "author": "",
@@ -22,7 +22,7 @@
     "@types/node": "^22.14.1",
     "puppeteer": "^24.17.1",
     "ts-node-dev": "^2.0.0",
-    "typescript": "^5.8.3"
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "arabic-reshaper": "^1.1.0",
