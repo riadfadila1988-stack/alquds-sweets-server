@@ -1,4 +1,5 @@
 import Notification from './notification.model';
+import PushTokenService from '../push-token/push-token.service';
 
 // Default projection to avoid loading large fields into memory by default.
 const DEFAULT_PROJECTION = {
@@ -13,7 +14,16 @@ const DEFAULT_PROJECTION = {
 class NotificationService {
   async createNotification(message: string, materialId?: string) {
     const n = new Notification({ message, materialId });
-    return n.save();
+    const saved = await n.save();
+
+    // Send push notification to all admins
+    try {
+      await PushTokenService.sendToRole('admin', 'إشعار جديد', message);
+    } catch (error) {
+      console.error('Failed to send push notification:', error);
+    }
+
+    return saved;
   }
 
   async findUnreadForMaterial(materialId: string, includeData = false) {
@@ -66,12 +76,30 @@ class NotificationService {
   // New: create targeted notification
   async createForUser(message: string, recipientId: string, data?: any) {
     const n = new Notification({ message, recipient: recipientId, data });
-    return n.save();
+    const saved = await n.save();
+
+    // Send push notification to the specific user
+    try {
+      await PushTokenService.sendToUser(recipientId, 'إشعار جديد', message, data);
+    } catch (error) {
+      console.error('Failed to send push notification:', error);
+    }
+
+    return saved;
   }
 
   async createForRole(message: string, role: string, data?: any) {
     const n = new Notification({ message, role, data });
-    return n.save();
+    const saved = await n.save();
+
+    // Send push notification to all users with this role
+    try {
+      await PushTokenService.sendToRole(role, 'إشعار جديد', message, data);
+    } catch (error) {
+      console.error('Failed to send push notification:', error);
+    }
+
+    return saved;
   }
 
   // New: find unread for user
