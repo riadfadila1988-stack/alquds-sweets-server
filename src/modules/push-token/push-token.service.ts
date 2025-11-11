@@ -1,7 +1,11 @@
 import PushToken from './push-token.model';
 import { Expo, ExpoPushMessage, ExpoPushTicket } from 'expo-server-sdk';
 
-const expo = new Expo();
+// Initialize Expo SDK with access token for production
+const expo = new Expo({
+  accessToken: process.env.EXPO_ACCESS_TOKEN,
+  useFcmV1: true, // Use FCM v1 API for better Android support
+});
 
 class PushTokenService {
   /**
@@ -80,6 +84,8 @@ class PushTokenService {
         return { success: true, sent: 0 };
       }
 
+      console.log(`Sending push notification to ${validTokens.length} devices`);
+
       // Create the messages
       const messages: ExpoPushMessage[] = validTokens.map(token => ({
         to: token,
@@ -88,34 +94,54 @@ class PushTokenService {
         body,
         data: data || {},
         priority: 'high',
+        channelId: 'default', // Android notification channel
       }));
 
       // Send in chunks (Expo has a limit of 100 per request)
       const chunks = expo.chunkPushNotifications(messages);
       const tickets: ExpoPushTicket[] = [];
+      let successCount = 0;
+      let errorCount = 0;
 
       for (const chunk of chunks) {
         try {
           const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
           tickets.push(...ticketChunk);
+          console.log(`Sent chunk of ${chunk.length} notifications`);
         } catch (error) {
           console.error('Error sending push notification chunk:', error);
+          errorCount += chunk.length;
         }
       }
 
       // Check for errors in tickets
-      for (const ticket of tickets) {
+      for (let i = 0; i < tickets.length; i++) {
+        const ticket = tickets[i];
         if (ticket.status === 'error') {
-          console.error('Push notification error:', ticket.message);
+          errorCount++;
+          console.error('Push notification error:', {
+            message: ticket.message,
+            details: ticket.details,
+            token: validTokens[i]?.substring(0, 20) + '...',
+          });
+
           if (ticket.details?.error === 'DeviceNotRegistered') {
             // Remove invalid tokens
-            // Note: You'd need to extract the token from the error to remove it
-            console.log('Device not registered, should remove token');
+            const invalidToken = validTokens[i];
+            if (invalidToken) {
+              console.log('Removing unregistered device token:', invalidToken.substring(0, 20) + '...');
+              await this.unregisterToken(invalidToken).catch(err =>
+                console.error('Failed to remove invalid token:', err)
+              );
+            }
           }
+        } else if (ticket.status === 'ok') {
+          successCount++;
         }
       }
 
-      return { success: true, sent: tickets.length };
+      console.log(`Push notification results: ${successCount} success, ${errorCount} errors`);
+      return { success: true, sent: successCount, errors: errorCount };
     } catch (error) {
       console.error('Error sending push notifications:', error);
       throw error;
