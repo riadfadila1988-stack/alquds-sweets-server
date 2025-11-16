@@ -7,6 +7,7 @@ import taskGroupRoutes from './modules/task-group/task-group.routes';
 import workDayPlanRoutes from './modules/work-day-plan/work-day-plan.routes';
 import materialGroupRoutes from './modules/material-group/material-group.routes';
 import pushTokenRoutes from './modules/push-token/push-token.routes';
+import materialUsageRoutes from './modules/material-usage/material-usage.routes';
 
 const router = Router();
 
@@ -16,6 +17,7 @@ const router = Router();
 router.use('/api/v1/attendance', attendanceRoutes);
 router.use('/api/v1/users', usersRoutes);
 router.use('/api/v1/materials', materialRoutes);
+router.use('/api/v1/material-usage', materialUsageRoutes);
 router.use('/api/v1/material-groups', materialGroupRoutes);
 router.use('/api/v1/notifications', notificationRoutes);
 router.use('/api/v1/task-groups', taskGroupRoutes);

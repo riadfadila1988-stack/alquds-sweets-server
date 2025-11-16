@@ -1,6 +1,7 @@
 import Material from './material.model';
 import { IMaterial } from './material.interface';
 import NotificationService from '../notification/notification.service';
+import MaterialUsageService from '../material-usage/material-usage.service';
 
 class MaterialService {
     async getAllMaterials(limit = 100, page = 1): Promise<IMaterial[]> {
@@ -34,10 +35,12 @@ class MaterialService {
         return saved;
     }
 
-    async updateMaterial(id: string, materialData: Partial<IMaterial>): Promise<IMaterial | null> {
+    async updateMaterial(id: string, materialData: Partial<IMaterial>, userId?: string, userName?: string): Promise<IMaterial | null> {
         // Load the existing document so Mongoose `updatedAt` timestamp is applied on save
         const existing = await Material.findById(id);
         if (!existing) return null;
+
+        const previousQuantity = existing.quantity ?? 0;
 
         // assign provided fields
         Object.keys(materialData).forEach((key) => {
@@ -47,6 +50,22 @@ class MaterialService {
 
         const updated = await existing.save();
         if (!updated) return null;
+
+        // Log material usage if quantity changed
+        if (materialData.quantity !== undefined && materialData.quantity !== previousQuantity) {
+            try {
+                await MaterialUsageService.logMaterialUsage({
+                    materialId: String(updated._id),
+                    materialName: updated.name,
+                    previousQuantity,
+                    newQuantity: updated.quantity ?? 0,
+                    userId,
+                    userName,
+                });
+            } catch (e) {
+                console.warn('Failed to log material usage', e);
+            }
+        }
 
         try {
             const q = updated.quantity ?? 0;
@@ -68,13 +87,29 @@ class MaterialService {
         return updated;
     }
 
-    async updateMaterialQuantity(id: string, data: { quantity?: number }): Promise<IMaterial | null> {
+    async updateMaterialQuantity(id: string, data: { quantity?: number; userId?: string; userName?: string }): Promise<IMaterial | null> {
         const existing = await Material.findById(id);
         if (!existing) return null;
+
+        const previousQuantity = existing.quantity ?? 0;
 
         if (typeof data.quantity === 'number') existing.quantity = data.quantity;
 
         const updated = await existing.save();
+        // Log material usage change
+        try {
+            await MaterialUsageService.logMaterialUsage({
+                materialId: String(updated._id),
+                materialName: updated.name,
+                previousQuantity,
+                newQuantity: updated.quantity ?? 0,
+                userId: data.userId,
+                userName: data.userName,
+            });
+        } catch (e) {
+            console.warn('Failed to log material usage', e);
+        }
+
 
         try {
             const q = updated.quantity ?? 0;

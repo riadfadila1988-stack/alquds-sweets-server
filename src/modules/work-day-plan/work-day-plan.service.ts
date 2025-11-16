@@ -2,6 +2,7 @@ import { WorkDayPlan } from './work-day-plan.model';
 import { IWorkDayPlan } from './work-day-plan.interface';
 import Material from '../material/material.model';
 import NotificationService from '../notification/notification.service';
+import MaterialUsageService from '../material-usage/material-usage.service';
 // Luxon for timezone-aware conversions
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { DateTime } = require('luxon');
@@ -189,6 +190,20 @@ class WorkDayPlanService {
               const newQty = Math.max(0, currentQty - usedQty);
               await Material.findByIdAndUpdate(matRef, { quantity: newQty }, { new: true });
 
+              // Log material usage
+              try {
+                await MaterialUsageService.logMaterialUsage({
+                  materialId: String(matRef),
+                  materialName: mat.name,
+                  previousQuantity: currentQty,
+                  newQuantity: newQty,
+                  userId: newUserId,
+                  userName: newAssign.user?.name || 'Unknown',
+                });
+              } catch (logErr) {
+                console.error('Failed to log material usage for task completion', logErr);
+              }
+
               // If the material has a numeric notificationThreshold, create a low-stock notification
               // when the quantity crosses from >= threshold to < threshold. Avoid duplicate unread notifications.
               try {
@@ -233,6 +248,20 @@ class WorkDayPlanService {
               const currentQty = Number(mat.quantity) || 0;
               const newQty = currentQty + prodQty;
               await Material.findByIdAndUpdate(matRef, { quantity: newQty }, { new: true });
+
+              // Log material production (addition)
+              try {
+                await MaterialUsageService.logMaterialUsage({
+                  materialId: String(matRef),
+                  materialName: mat.name,
+                  previousQuantity: currentQty,
+                  newQuantity: newQty,
+                  userId: newUserId,
+                  userName: newAssign.user?.name || 'Unknown',
+                });
+              } catch (logErr) {
+                console.error('Failed to log material production for task completion', logErr);
+              }
             } catch (err) {
               // Log error and continue
               // eslint-disable-next-line no-console
