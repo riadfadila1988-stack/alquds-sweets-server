@@ -1,4 +1,3 @@
-
 import express, { Request, Response } from 'express';
 import MaterialUsageController from './material-usage.controller';
 import { authenticateJWT, authorizeRoles } from '../../core/middlewares/authJwt';
@@ -14,10 +13,9 @@ router.get('/statistics/monthly',
   }
 );
 
-// Get material history (admin only)
+// Get material history by id (authenticated users)
 router.get('/material/:materialId/history',
   authenticateJWT,
-  authorizeRoles('admin'),
   async (req: Request, res: Response) => {
     await MaterialUsageController.getMaterialHistory(req, res);
   }
@@ -33,4 +31,3 @@ router.get('/all',
 );
 
 export default router;
-

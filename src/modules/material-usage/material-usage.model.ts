@@ -7,7 +7,7 @@ const MaterialUsageSchema = new Schema<IMaterialUsage>({
   previousQuantity: { type: Number, required: true },
   newQuantity: { type: Number, required: true },
   quantityChange: { type: Number, required: true },
-  userId: { type: String },
+  userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   userName: { type: String },
   timestamp: { type: Date, required: true, default: Date.now, index: true },
 }, { timestamps: true });

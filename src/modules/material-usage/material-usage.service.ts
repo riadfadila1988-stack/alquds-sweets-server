@@ -123,6 +123,7 @@ class MaterialUsageService {
         return await MaterialUsage.find(query)
             .sort({ timestamp: -1 })
             .limit(limit)
+            .populate('userId', 'name')
             .lean();
     }
 
