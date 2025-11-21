@@ -7,8 +7,7 @@ const MaterialSchema = new Schema<IMaterial>({
   quantity: { type: Number, required: true, default: 0 },
   cost: { type: Number, required: true },
   notificationThreshold: { type: Number, required: true },
-});
+}, { timestamps: true });
 
 const Material = model<IMaterial>('Material', MaterialSchema);
 export default Material;
-

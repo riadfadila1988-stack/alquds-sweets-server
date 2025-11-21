@@ -117,7 +117,8 @@ class EmployeeAttendanceService {
     async getMonthlyHistory(
         employeeId: string, 
         startDate?: Date, 
-        endDate?: Date
+        endDate?: Date,
+        options?: { page?: number; limit?: number }
     ): Promise<MonthlyHistoryResponse> {
         try {
             await this.validateEmployee(employeeId);
@@ -126,22 +127,39 @@ class EmployeeAttendanceService {
             const start = startDate || new Date(now.getFullYear(), now.getMonth(), 1);
             const end = endDate || new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
+            // Compute totals using an aggregation on the DB side to avoid loading all records
+            const agg = await EmployeeAttendanceModel.aggregate([
+                { $match: { employeeId: new Types.ObjectId(employeeId), date: { $gte: start, $lte: end } } },
+                { $group: {
+                    _id: null,
+                    totalMinutes: { $sum: { $ifNull: ["$duration", 0] } },
+                    totalDays: { $sum: { $cond: [{ $eq: ["$status", "clocked-out"] }, 1, 0] } },
+                    totalRecords: { $sum: 1 }
+                }}
+            ]).exec();
+
+            const totals = (agg && agg[0]) ? agg[0] : { totalMinutes: 0, totalDays: 0, totalRecords: 0 };
+
+            // Paginate record list to avoid returning arbitrarily large arrays
+            const page = Math.max(1, Number(options?.page) || 1);
+            const limit = Math.max(1, Math.min(1000, Number(options?.limit) || 100));
+            const skip = (page - 1) * limit;
+
             const records = await EmployeeAttendanceModel.find({
                 employeeId: new Types.ObjectId(employeeId),
                 date: { $gte: start, $lte: end }
-            }).sort({ date: -1 });
-
-            // Calculate totals
-            const totalMinutesWorked = records.reduce((sum, record) => sum + (record.duration || 0), 0);
-            const totalDaysPresent = records.filter(record => record.status === 'clocked-out').length;
+            }).sort({ date: -1 }).skip(skip).limit(limit).lean();
 
             return {
                 month: start.getMonth() + 1,
                 year: start.getFullYear(),
                 records,
-                totalMinutesWorked,
-                totalDaysPresent
-            };
+                totalMinutesWorked: totals.totalMinutes || 0,
+                totalDaysPresent: totals.totalDays || 0,
+                totalRecords: totals.totalRecords || 0,
+                page,
+                limit
+            } as any; // keep compatibility with existing MonthlyHistoryResponse shape
         } catch (err) {
             throw err;
         }
@@ -158,7 +176,7 @@ class EmployeeAttendanceService {
             const attendance = await EmployeeAttendanceModel.findOne({
                 employeeId: new Types.ObjectId(employeeId),
                 date: today
-            });
+            }).lean();
 
             return attendance;
         } catch (err) {
@@ -178,7 +196,8 @@ class EmployeeAttendanceService {
                 date: targetDate
             })
             .populate('employeeId', 'name idNumber role')
-            .sort({ clockIn: -1 });
+            .sort({ clockIn: -1 })
+            .lean();
 
             return records;
         } catch (err) {
@@ -195,42 +214,29 @@ class EmployeeAttendanceService {
             const start = startDate || new Date(now.getFullYear(), now.getMonth(), 1);
             const end = endDate || new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
 
-            const records = await EmployeeAttendanceModel.find({
-                date: { $gte: start, $lte: end }
-            })
-            .populate('employeeId', 'name idNumber role')
-            .sort({ date: -1 });
+            // Aggregate on the DB side to avoid loading all records into Node memory
+            const pipeline: any[] = [
+                { $match: { date: { $gte: start, $lte: end } } },
+                { $group: {
+                    _id: "$employeeId",
+                    totalMinutes: { $sum: { $ifNull: ["$duration", 0] } },
+                    totalDays: { $sum: { $cond: [{ $eq: ["$status", "clocked-out"] }, 1, 0] } },
+                    recordCount: { $sum: 1 }
+                }},
+                // Join employee details
+                { $lookup: { from: "users", localField: "_id", foreignField: "_id", as: "employee" } },
+                { $unwind: { path: "$employee", preserveNullAndEmptyArrays: true } },
+                { $project: { _id: 0, employee: "$employee", totalMinutes: 1, totalDays: 1, recordCount: 1 } },
+                { $sort: { "employee.name": 1 } }
+            ];
 
-            // Group by employee
-            const employeeSummary = new Map();
+            const aggResult = await EmployeeAttendanceModel.aggregate(pipeline).exec();
 
-            records.forEach(record => {
-                const empId = (record.employeeId as any)?._id?.toString();
-                if (!empId) return;
-
-                if (!employeeSummary.has(empId)) {
-                    employeeSummary.set(empId, {
-                        employee: record.employeeId,
-                        totalMinutes: 0,
-                        totalDays: 0,
-                        records: []
-                    });
-                }
-
-                const summary = employeeSummary.get(empId);
-                summary.records.push(record);
-                if (record.status === 'clocked-out') {
-                    summary.totalDays += 1;
-                }
-                summary.totalMinutes += record.duration || 0;
-            });
-
-            const employees = Array.from(employeeSummary.values()).map(emp => ({
-                employee: emp.employee,
-                totalMinutes: emp.totalMinutes,
-                totalDays: emp.totalDays,
-                totalHours: parseFloat((emp.totalMinutes / 60).toFixed(2)),
-                records: emp.records
+            const employees = aggResult.map((row: any) => ({
+                employee: row.employee,
+                totalMinutes: row.totalMinutes || 0,
+                totalDays: row.totalDays || 0,
+                recordCount: row.recordCount || 0
             }));
 
             return {

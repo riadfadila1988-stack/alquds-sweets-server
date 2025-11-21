@@ -2,23 +2,148 @@ import { WorkDayPlan } from './work-day-plan.model';
 import { IWorkDayPlan } from './work-day-plan.interface';
 import Material from '../material/material.model';
 import NotificationService from '../notification/notification.service';
+import MaterialUsageService from '../material-usage/material-usage.service';
+// Luxon for timezone-aware conversions
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { DateTime } = require('luxon');
 
 class WorkDayPlanService {
   async getByDate(date: string): Promise<IWorkDayPlan | null> {
     const d = new Date(date);
-    return await WorkDayPlan.findOne({ date: d }).populate('assignments.user');
+    return await WorkDayPlan.findOne({ date: d }).populate('assignments.user').lean();
   }
 
-  async getAll(): Promise<IWorkDayPlan[]> {
-    return await WorkDayPlan.find().populate('assignments.user');
+  // Make getAll paginated and lean to avoid returning the entire collection into memory
+  async getAll(limit = 100, page = 1): Promise<IWorkDayPlan[]> {
+    const capped = Math.max(1, Math.min(1000, Number(limit)));
+    const p = Math.max(1, Number(page));
+    const skip = (p - 1) * capped;
+    return await WorkDayPlan.find().skip(skip).limit(capped).populate('assignments.user').lean();
   }
 
   async createOrUpdate(date: string, assignments: any[]): Promise<IWorkDayPlan> {
     const d = new Date(date);
+
+    // Helper: parse a value into a Date when possible. Accepts ISO strings, epoch numbers,
+    // or time-only strings like 'HH:mm' which are interpreted on the provided plan date `d`.
+    const parseDateOrTimeOnPlanDate = (val: any) => {
+      if (val === undefined || val === null) return val;
+      // If already a Date, return if valid
+      if (val instanceof Date) return Number.isFinite(val.getTime()) ? val : val;
+      // If numeric (epoch)
+      if (typeof val === 'number' && Number.isFinite(val)) {
+        const dd = new Date(val);
+        return Number.isFinite(dd.getTime()) ? dd : val;
+      }
+      if (typeof val === 'string') {
+        // If ISO-like or timezone-inclusive, try parsing as Date
+        if (val.includes('T') || /\d{4}-\d{2}-\d{2}/.test(val)) {
+          const dd = new Date(val);
+          if (Number.isFinite(dd.getTime())) return dd;
+        }
+        // Accept 'HH:mm' (optionally with seconds) and interpret on plan date
+        const hhmm = /^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$/.exec(val);
+        if (hhmm) {
+          const hh = Number(hhmm[1]);
+          const mm = Number(hhmm[2]);
+          const ss = hhmm[3] ? Number(hhmm[3]) : 0;
+          if (hh >= 0 && hh < 24 && mm >= 0 && mm < 60 && ss >= 0 && ss < 60) {
+            // Determine timezone to interpret the user-entered wall-clock. Prefer per-task timezone
+            // (if provided by client), then server-level NOTIFY_TZ, then fall back to Asia/Jerusalem.
+            // This MUST match the fallback in check-late-tasks.ts to avoid timezone mismatches.
+            const tz = process.env.NOTIFY_TZ || 'Asia/Jerusalem';
+            try {
+              const dt = DateTime.fromJSDate(d, { zone: tz }).set({ hour: hh, minute: mm, second: ss, millisecond: 0 });
+              if (dt.isValid) return dt.toJSDate();
+            } catch {
+              // fallback to local interpretation if Luxon fails
+              return new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm, ss, 0);
+            }
+          }
+        }
+        // Fallback: try generic Date parse
+        const dd2 = new Date(val);
+        if (Number.isFinite(dd2.getTime())) return dd2;
+      }
+      return val;
+    };
+
+    // Map common alternative names to server canonical names before normalization
+    const mapTaskNames = (t: any) => {
+      if (!t || typeof t !== 'object') return t;
+      const mapped: any = { ...t };
+      // Scheduled start: accept startAt / scheduledStart / scheduleAt / start_at variants
+      mapped.startAt = mapped.startAt ?? mapped.scheduledStart ?? mapped.scheduleAt ?? mapped.start_at ?? mapped.scheduled_start ?? mapped.scheduled_at ?? mapped.start;
+      // Actual times: try to preserve startTime/endTime or accept alternative names
+      mapped.startTime = mapped.startTime ?? mapped.startedAt ?? mapped.start_at_time ?? mapped.started_at ?? mapped.started_at_time ?? mapped.actualStart;
+      mapped.endTime = mapped.endTime ?? mapped.endedAt ?? mapped.end_at_time ?? mapped.ended_at ?? mapped.actualEnd;
+      return mapped;
+    };
+
+    // Normalize incoming assignments: ensure task startAt/startTime/endTime (if present)
+    // are Date objects (convert from ISO strings or 'HH:mm' when possible) relative to plan date `d`.
+    const normalizedAssignments = (assignments || []).map((a: any) => ({
+      ...a,
+      tasks: (a.tasks || []).map((t: any) => {
+        const mapped = mapTaskNames(t);
+        // capture the raw scheduled string if provided (prefer string fields). If startAt is a Date/ISO and
+        // no startAtString was provided, derive an HH:mm from the stored Date using UTC hours/minutes so the
+        // UI can display the exact stored wall-clock time without timezone conversion.
+        let rawStartAtString: any = undefined;
+        if (mapped.startAtString !== undefined && mapped.startAtString !== null) {
+          rawStartAtString = mapped.startAtString;
+        } else if (typeof mapped.startAt === 'string') {
+          rawStartAtString = mapped.startAt;
+        } else if (mapped.startAt) {
+          try {
+            const dd = new Date(mapped.startAt);
+            if (!Number.isNaN(dd.getTime())) {
+              // Use local hours/minutes so the UI reflects the stored wall-clock time
+              const hh = String(dd.getHours()).padStart(2, '0');
+              const mm = String(dd.getMinutes()).padStart(2, '0');
+              rawStartAtString = `${hh}:${mm}`;
+            }
+          } catch {}
+        }
+        // Compute startAt: prefer explicit startAt value if provided. If only startAtString exists,
+        // convert it into an absolute UTC Date using Luxon and the configured NOTIFY_TZ (or UTC).
+        let computedStartAt = undefined;
+        if (mapped.startAt) {
+          // If client sent an ISO string, number, or Date, parse it to Date
+          computedStartAt = parseDateOrTimeOnPlanDate(mapped.startAt);
+        } else if (mapped.startAtString) {
+          // parse HH:mm on plan date using configured timezone
+          const m = /^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$/.exec(mapped.startAtString);
+          if (m) {
+            const hh = Number(m[1]);
+            const mm = Number(m[2]);
+            const ss = m[3] ? Number(m[3]) : 0;
+            const tz = ((mapped as any).timezone) || process.env.NOTIFY_TZ || 'Asia/Jerusalem';
+            try {
+              const planDt = DateTime.fromJSDate(d, { zone: tz });
+              const dt = planDt.set({ hour: hh, minute: mm, second: ss, millisecond: 0 });
+              if (dt.isValid) computedStartAt = dt.toJSDate();
+            } catch {
+              // fallback to local
+              computedStartAt = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm, ss, 0);
+            }
+          }
+        }
+
+        return {
+          ...mapped,
+          startAtString: rawStartAtString,
+          startAt: computedStartAt,
+          startTime: parseDateOrTimeOnPlanDate(mapped && mapped.startTime),
+          endTime: parseDateOrTimeOnPlanDate(mapped && mapped.endTime),
+        };
+      }),
+    }));
+
     let plan = await WorkDayPlan.findOne({ date: d });
     if (!plan) {
       // Creating a brand new plan; nothing to compare against, so just save
-      plan = new WorkDayPlan({ date: d, assignments });
+      plan = new WorkDayPlan({ date: d, assignments: normalizedAssignments });
       return await plan.save();
     }
 
@@ -28,7 +153,7 @@ class WorkDayPlanService {
     // Helper to normalize user id to string
     const uid = (u: any) => (u && (u._id || u)).toString();
 
-    for (const newAssign of assignments || []) {
+    for (const newAssign of normalizedAssignments || []) {
       const newUserId = uid(newAssign.user);
       const oldAssign = (oldAssignments || []).find((a: any) => uid(a.user) === newUserId);
       const newTasks = newAssign.tasks || [];
@@ -64,6 +189,20 @@ class WorkDayPlanService {
               const currentQty = Number(mat.quantity) || 0;
               const newQty = Math.max(0, currentQty - usedQty);
               await Material.findByIdAndUpdate(matRef, { quantity: newQty }, { new: true });
+
+              // Log material usage
+              try {
+                await MaterialUsageService.logMaterialUsage({
+                  materialId: String(matRef),
+                  materialName: mat.name,
+                  previousQuantity: currentQty,
+                  newQuantity: newQty,
+                  userId: newUserId,
+                  userName: newAssign.user?.name || 'Unknown',
+                });
+              } catch (logErr) {
+                console.error('Failed to log material usage for task completion', logErr);
+              }
 
               // If the material has a numeric notificationThreshold, create a low-stock notification
               // when the quantity crosses from >= threshold to < threshold. Avoid duplicate unread notifications.
@@ -109,6 +248,20 @@ class WorkDayPlanService {
               const currentQty = Number(mat.quantity) || 0;
               const newQty = currentQty + prodQty;
               await Material.findByIdAndUpdate(matRef, { quantity: newQty }, { new: true });
+
+              // Log material production (addition)
+              try {
+                await MaterialUsageService.logMaterialUsage({
+                  materialId: String(matRef),
+                  materialName: mat.name,
+                  previousQuantity: currentQty,
+                  newQuantity: newQty,
+                  userId: newUserId,
+                  userName: newAssign.user?.name || 'Unknown',
+                });
+              } catch (logErr) {
+                console.error('Failed to log material production for task completion', logErr);
+              }
             } catch (err) {
               // Log error and continue
               // eslint-disable-next-line no-console
@@ -120,7 +273,7 @@ class WorkDayPlanService {
     }
 
     // Persist the updated assignments
-    plan.assignments = assignments;
+    plan.assignments = normalizedAssignments;
     return await plan.save();
   }
 

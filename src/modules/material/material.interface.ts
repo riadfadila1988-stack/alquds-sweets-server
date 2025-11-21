@@ -6,5 +6,7 @@ export interface IMaterial extends Document {
   quantity: number;
   cost: number;
   notificationThreshold: number;
+  // timestamps
+  createdAt?: Date;
+  updatedAt?: Date;
 }
-
