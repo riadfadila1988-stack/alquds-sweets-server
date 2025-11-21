@@ -4,7 +4,7 @@ import NotificationService from '../notification/notification.service';
 import MaterialUsageService from '../material-usage/material-usage.service';
 
 class MaterialService {
-    async getAllMaterials(limit = 100, page = 1): Promise<IMaterial[]> {
+    async getAllMaterials(limit = 120, page = 1): Promise<IMaterial[]> {
         const capped = Math.max(1, Math.min(1000, Number(limit)));
         const p = Math.max(1, Number(page));
         const skip = (p - 1) * capped;
