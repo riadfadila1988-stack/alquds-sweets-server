@@ -17,6 +17,18 @@ class WorkDayPlanController extends BaseController {
     }
   }
 
+  async getByDateForUser(req: Request, res: Response) {
+    try {
+      const { date, userId } = req.query as any;
+      if (!date) return this.handleError(res, 'Missing date query param');
+      if (!userId) return this.handleError(res, 'Missing userId query param');
+      const data = await this.service.getByDateForUser(date, userId);
+      this.handleSuccess(res, data);
+    } catch (e: any) {
+      this.handleError(res, e.message || 'Failed to get plan by date for user');
+    }
+  }
+
   async getAll(req: Request, res: Response) {
     try {
       const data = await this.service.getAll();
@@ -54,6 +66,24 @@ class WorkDayPlanController extends BaseController {
       res.status(204).send();
     } catch (e: any) {
       this.handleError(res, e.message || 'Failed to delete plan');
+    }
+  }
+
+  async updateUserTask(req: Request, res: Response) {
+    try {
+      const { date, userId, taskId, taskIndex, updates } = req.body;
+
+      if (!date) return this.handleError(res, 'Missing date in body');
+      if (!userId) return this.handleError(res, 'Missing userId in body');
+      if (!updates) return this.handleError(res, 'Missing updates in body');
+      if (taskId === undefined && taskIndex === undefined) {
+        return this.handleError(res, 'Must provide either taskId or taskIndex');
+      }
+
+      const data = await this.service.updateUserTask(date, userId, taskId, taskIndex, updates);
+      this.handleSuccess(res, data);
+    } catch (e: any) {
+      this.handleError(res, e.message || 'Failed to update user task');
     }
   }
 }

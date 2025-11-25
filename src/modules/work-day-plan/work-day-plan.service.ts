@@ -13,6 +13,32 @@ class WorkDayPlanService {
     return await WorkDayPlan.findOne({ date: d }).populate('assignments.user').lean();
   }
 
+  /**
+   * Get work day plan for a specific user only
+   * Returns only the assignment for the specified user, not all assignments
+   */
+  async getByDateForUser(date: string, userId: string): Promise<{ date: Date; assignment: any } | null> {
+    const d = new Date(date);
+    const plan = await WorkDayPlan.findOne({ date: d }).populate('assignments.user').lean();
+
+    if (!plan) {
+      return null;
+    }
+
+    // Find the assignment for this specific user
+    const uid = (u: any) => (u && (u._id || u)).toString();
+    const assignment = plan.assignments.find((a: any) => uid(a.user) === userId);
+
+    if (!assignment) {
+      return null;
+    }
+
+    return {
+      date: plan.date,
+      assignment: assignment
+    };
+  }
+
   // Make getAll paginated and lean to avoid returning the entire collection into memory
   async getAll(limit = 100, page = 1): Promise<IWorkDayPlan[]> {
     const capped = Math.max(1, Math.min(1000, Number(limit)));
@@ -279,6 +305,207 @@ class WorkDayPlanService {
 
   async deleteById(id: string) {
     return await WorkDayPlan.findByIdAndDelete(id);
+  }
+
+  /**
+   * Update a specific task for a specific user without replacing all assignments
+   * This is more efficient and prevents race conditions when multiple users update tasks simultaneously
+   * Returns only the user's assignment, not all assignments
+   */
+  async updateUserTask(
+    date: string,
+    userId: string,
+    taskId: string | undefined,
+    taskIndex: number | undefined,
+    updates: { startTime?: Date | string; endTime?: Date | string; overrunReason?: string }
+  ): Promise<{ date: Date; assignment: any } | null> {
+    const d = new Date(date);
+    const plan = await WorkDayPlan.findOne({ date: d });
+
+    if (!plan) {
+      throw new Error('Work day plan not found for the specified date');
+    }
+
+    // Helper to parse date values
+    const parseDateOrTimeOnPlanDate = (val: any) => {
+      if (val === undefined || val === null) return val;
+      if (val instanceof Date) return Number.isFinite(val.getTime()) ? val : val;
+      if (typeof val === 'number' && Number.isFinite(val)) {
+        const dd = new Date(val);
+        return Number.isFinite(dd.getTime()) ? dd : val;
+      }
+      if (typeof val === 'string') {
+        if (val.includes('T') || /\d{4}-\d{2}-\d{2}/.test(val)) {
+          const dd = new Date(val);
+          if (Number.isFinite(dd.getTime())) return dd;
+        }
+        const hhmm = /^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$/.exec(val);
+        if (hhmm) {
+          const hh = Number(hhmm[1]);
+          const mm = Number(hhmm[2]);
+          const ss = hhmm[3] ? Number(hhmm[3]) : 0;
+          if (hh >= 0 && hh < 24 && mm >= 0 && mm < 60 && ss >= 0 && ss < 60) {
+            const tz = process.env.NOTIFY_TZ || 'Asia/Jerusalem';
+            try {
+              const dt = DateTime.fromJSDate(d, { zone: tz }).set({ hour: hh, minute: mm, second: ss, millisecond: 0 });
+              if (dt.isValid) return dt.toJSDate();
+            } catch {
+              return new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm, ss, 0);
+            }
+          }
+        }
+        const dd2 = new Date(val);
+        if (Number.isFinite(dd2.getTime())) return dd2;
+      }
+      return val;
+    };
+
+    // Find the assignment for this user
+    const uid = (u: any) => (u && (u._id || u)).toString();
+    const assignmentIndex = plan.assignments.findIndex((a: any) => uid(a.user) === userId);
+
+    if (assignmentIndex === -1) {
+      throw new Error('Assignment not found for the specified user');
+    }
+
+    const assignment = plan.assignments[assignmentIndex];
+    const oldTasks = assignment.tasks || [];
+
+    // Find the task by _id or index
+    let targetTaskIndex = -1;
+    if (taskId) {
+      targetTaskIndex = oldTasks.findIndex((t: any) => t && t._id && t._id.toString() === taskId);
+    }
+    if (targetTaskIndex === -1 && taskIndex !== undefined) {
+      targetTaskIndex = taskIndex;
+    }
+
+    if (targetTaskIndex === -1 || !oldTasks[targetTaskIndex]) {
+      throw new Error('Task not found');
+    }
+
+    const oldTask = oldTasks[targetTaskIndex];
+    const oldEnded = !!oldTask.endTime;
+
+    // Apply updates to the task
+    if (updates.startTime !== undefined) {
+      oldTask.startTime = parseDateOrTimeOnPlanDate(updates.startTime);
+    }
+    if (updates.endTime !== undefined) {
+      oldTask.endTime = parseDateOrTimeOnPlanDate(updates.endTime);
+    }
+    if (updates.overrunReason !== undefined) {
+      oldTask.overrunReason = updates.overrunReason;
+    }
+
+    const newEnded = !!oldTask.endTime;
+
+    // If task just transitioned from not-ended to ended, process materials
+    if (newEnded && !oldEnded) {
+      // Decrement used materials
+      const usedMaterials = oldTask.usedMaterials || [];
+      for (const um of usedMaterials) {
+        try {
+          const matRef = um && (um.material && (um.material._id || um.material));
+          const usedQty = Number(um && um.quantity) || 0;
+          if (!matRef || usedQty <= 0) continue;
+
+          const mat = await Material.findById(matRef);
+          if (!mat) continue;
+          const currentQty = Number(mat.quantity) || 0;
+          const newQty = Math.max(0, currentQty - usedQty);
+          await Material.findByIdAndUpdate(matRef, { quantity: newQty }, { new: true });
+
+          // Log material usage
+          try {
+            await MaterialUsageService.logMaterialUsage({
+              materialId: String(matRef),
+              materialName: mat.name,
+              previousQuantity: currentQty,
+              newQuantity: newQty,
+              userId: userId,
+              userName: assignment.user?.name || 'Unknown',
+            });
+          } catch (logErr) {
+            console.error('Failed to log material usage for task completion', logErr);
+          }
+
+          // Create low-stock notification if needed
+          try {
+            const threshold = Number(mat.notificationThreshold);
+            if (!Number.isNaN(threshold)) {
+              const crossed = currentQty >= threshold && newQty < threshold;
+              if (crossed) {
+                const existing = await NotificationService.findUnreadForMaterial(String(matRef));
+                if (!existing) {
+                  const messageAr = `المادة '${mat.name}' منخفضة: المتبقي ${newQty} (الحد الأدنى ${threshold})`;
+                  console.log('[WorkDayPlan] creating low-stock notification for material', String(matRef));
+                  await NotificationService.createNotification(messageAr, String(matRef));
+                }
+              }
+            }
+          } catch (notifErr) {
+            console.error('Failed to create low-stock notification for material', matRef, notifErr);
+          }
+        } catch (err) {
+          console.error('Failed to decrement material for usedMaterial', um, err);
+        }
+      }
+
+      // Increment produced materials
+      const producedMaterials = oldTask.producedMaterials || [];
+      for (const pm of producedMaterials) {
+        try {
+          const matRef = pm && (pm.material && (pm.material._id || pm.material));
+          const prodQty = Number(pm && pm.quantity) || 0;
+          if (!matRef || prodQty <= 0) continue;
+
+          const mat = await Material.findById(matRef);
+          if (!mat) continue;
+          const currentQty = Number(mat.quantity) || 0;
+          const newQty = currentQty + prodQty;
+          await Material.findByIdAndUpdate(matRef, { quantity: newQty }, { new: true });
+
+          // Log material production
+          try {
+            await MaterialUsageService.logMaterialUsage({
+              materialId: String(matRef),
+              materialName: mat.name,
+              previousQuantity: currentQty,
+              newQuantity: newQty,
+              userId: userId,
+              userName: assignment.user?.name || 'Unknown',
+            });
+          } catch (logErr) {
+            console.error('Failed to log material production for task completion', logErr);
+          }
+        } catch (err) {
+          console.error('Failed to increment material for producedMaterial', pm, err);
+        }
+      }
+    }
+
+    // Save and return only the updated user's assignment
+    await plan.save();
+
+    // Fetch the updated plan with populated user data
+    const updatedPlan = await WorkDayPlan.findOne({ date: d }).populate('assignments.user').lean();
+
+    if (!updatedPlan) {
+      return null;
+    }
+
+    // Find and return only this user's assignment
+    const updatedAssignment = updatedPlan.assignments.find((a: any) => uid(a.user) === userId);
+
+    if (!updatedAssignment) {
+      return null;
+    }
+
+    return {
+      date: updatedPlan.date,
+      assignment: updatedAssignment
+    };
   }
 }
 
