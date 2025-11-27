@@ -12,9 +12,14 @@ const TaskSimpleSchema = new Schema({
   description: { type: String },
   usedMaterials: [UsedMaterialSchema],
   producedMaterials: [UsedMaterialSchema], // newly added: materials produced by this task
-  // Track when a task was started and ended
-  startTime: { type: Date },
-  endTime: { type: Date },
+  // Track scheduled and actual times for a task
+  startAt: { type: Date },    // when the employee should start the task (scheduled)
+  startAtString: { type: String }, // original scheduled time string (e.g., '20:30')
+  startTime: { type: Date },  // when the employee actually started
+  endTime: { type: Date },    // when the employee actually ended
+  overrunReason: { type: String }, // reason provided when task takes longer than planned
+  // Server-side helper flag to avoid duplicate late notifications
+  lateNotified: { type: Boolean, default: false },
 });
 
 const AssignmentSchema = new Schema({

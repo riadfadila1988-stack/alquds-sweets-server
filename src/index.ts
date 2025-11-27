@@ -23,5 +23,28 @@ io.on("connection", (socket) => {
 connectDB().then(() => {
     server.listen(PORT, () => {
         console.log(`🚀 Server running on http://localhost:${PORT}`);
+
+        // Log initial memory usage snapshot
+        try {
+          const mu = process.memoryUsage();
+          console.log('[startup] memoryUsage (bytes):', mu);
+        } catch (e) {
+          // ignore
+        }
+
+        // start background jobs after server & DB are up unless explicitly disabled
+        try {
+          const disableJobs = process.env.DISABLE_BG_JOBS === '1' || process.env.DISABLE_BG_JOBS === 'true';
+          if (!disableJobs) {
+            const jobs = require('./jobs/check-late-tasks');
+            if (jobs && typeof jobs.startLateTaskChecker === 'function') {
+              jobs.startLateTaskChecker();
+            }
+          } else {
+            console.log('[startup] background jobs disabled via DISABLE_BG_JOBS');
+          }
+        } catch (e) {
+          console.error('Failed to start background jobs', e);
+        }
     });
 });

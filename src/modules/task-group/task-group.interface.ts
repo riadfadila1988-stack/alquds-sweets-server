@@ -10,6 +10,7 @@ export interface ITask {
   name: string;
   duration: number; // in minutes
   description: string;
+  startAt?: Date | string; // optional start date/time for the task (Date object or ISO string)
   usedMaterials: IUsedMaterial[];
   producedMaterials?: IUsedMaterial[]; // newly added: materials created/produced by task
 }
