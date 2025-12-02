@@ -20,8 +20,7 @@ function formatTimeLocal(d: Date) {
 async function checkLateTasksOnce() {
   try {
     const today = new Date();
-    console.log('[LateTaskJob] Starting late task check at', today.toISOString());
-    
+
     // Normalize to server date-only (midnight)
     const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     // Use a cursor to stream matching plans to avoid loading all into memory
@@ -29,7 +28,6 @@ async function checkLateTasksOnce() {
     // [startOfDay, nextDay) instead of exact equality to avoid timezone-storage mismatches.
     const dayEnd = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
     const cursor = WorkDayPlan.find({ date: { $gte: startOfDay, $lt: dayEnd } }).cursor();
-    if (LATE_JOB_VERBOSE) console.log('[LateTaskJob][VERBOSE] querying plans in range', { startOfDay: startOfDay.toISOString(), dayEnd: dayEnd.toISOString() });
 
     const now = new Date();
 
@@ -37,9 +35,7 @@ async function checkLateTasksOnce() {
     // Default to Israel time if NOTIFY_TZ isn't set so server checks times as in Israel
     let defaultNotifyTZ = process.env.NOTIFY_TZ || 'Asia/Jerusalem';
 
-    if (LATE_JOB_VERBOSE) {
-      console.log('[LateTaskJob][VERBOSE] job start', { now: now.toISOString(), startOfDay: startOfDay.toISOString(), envNotifyTZ: process.env.NOTIFY_TZ, defaultNotifyTZ });
-    }
+
 
     // Log server time and relevant environment settings for debugging notification timing differences
     try {
@@ -53,7 +49,6 @@ async function checkLateTasksOnce() {
     } catch (e) {
       // defensive: logging should not break the job
       // eslint-disable-next-line no-console
-      console.error('[LateTaskJob] failed to log server time/env', e);
     }
 
     for (let plan = await cursor.next(); plan != null; plan = await cursor.next()) {
@@ -67,40 +62,21 @@ async function checkLateTasksOnce() {
         const userName = user && user.name ? user.name : (userId || 'Unknown');
 
         for (const task of (assign.tasks || [])) {
-          if (LATE_JOB_VERBOSE) {
-            console.log('[LateTaskJob][VERBOSE] checking task', { planDate: plan.date?.toISOString?.(), taskId: task._id, taskName: task.name, startAt: task.startAt?.toISOString?.(), startAtString: task.startAtString, startTime: task.startTime?.toISOString?.(), lateNotified: task.lateNotified });
-          }
+
           // Only consider tasks with scheduled start (either stored startAt Date or startAtString),
           // not yet started, and not already notified
           // More explicit null/undefined checks to avoid edge cases
           if (!task.startAt && !task.startAtString) {
-            if (LATE_JOB_VERBOSE) {
-              console.log('[LateTaskJob][VERBOSE] Task has no scheduled start time (skipping)', { 
-                taskId: task._id,
-                taskName: task.name,
-                userName,
-                planDate: plan.date?.toISOString?.(),
-                taskData: {
-                  startAt: task.startAt,
-                  startAtString: task.startAtString,
-                  startTime: task.startTime,
-                  endTime: task.endTime
-                }
-              });
-            }
+
             continue;
           }
           // Check if task has already been started - must be explicit to handle all cases
           if (task.startTime !== null && task.startTime !== undefined) {
-            if (LATE_JOB_VERBOSE) {
-              console.log('[LateTaskJob][VERBOSE] skipping task - already started', { taskId: task._id, startTime: task.startTime });
-            }
+
             continue;
           }
           if (task.lateNotified === true) {
-            if (LATE_JOB_VERBOSE) {
-              console.log('[LateTaskJob][VERBOSE] skipping task - already notified', { taskId: task._id });
-            }
+
             continue;
           }
 
@@ -109,9 +85,7 @@ async function checkLateTasksOnce() {
           // Construct scheduledDate using DateTime.fromObject with zone so notifications fire at the user's local intended time.
           let scheduledDate: Date | null = null;
           if (task.startAtString && typeof task.startAtString === 'string') {
-            if (LATE_JOB_VERBOSE) {
-              console.log('[LateTaskJob][VERBOSE] parsing startAtString', { startAtString: task.startAtString, planDate: plan.date?.toISOString?.() });
-            }
+
             const m = /^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$/.exec(task.startAtString);
             if (m) {
               const hh = Number(m[1]);
@@ -121,9 +95,7 @@ async function checkLateTasksOnce() {
               // Prefer per-task timezone, then configured NOTIFY_TZ, then detected server tz, then UTC.
               // Use the defaultNotifyTZ computed earlier so the same value logged is actually applied here.
               const tz = ((task as any) && (task as any).timezone) || defaultNotifyTZ;
-              if (LATE_JOB_VERBOSE) {
-                console.log('[LateTaskJob][VERBOSE] timezone for parsing', { tz, hh, mm, ss });
-              }
+
               if (tz) {
                 // Interpret the plan.date in the chosen zone, then set the wall-clock time (hh:mm:ss) there.
                 // This avoids mistakes when plan.date is stored as midnight UTC but the intended local date is different.
@@ -132,9 +104,7 @@ async function checkLateTasksOnce() {
                   const dt = planDt.set({ hour: hh, minute: mm, second: ss, millisecond: 0 });
                   if (dt.isValid) {
                     scheduledDate = dt.toJSDate();
-                    if (LATE_JOB_VERBOSE) {
-                      console.log('[LateTaskJob][VERBOSE] successfully parsed scheduledDate from startAtString', { scheduledDate: scheduledDate?.toISOString?.() });
-                    }
+
                   } else {
                     console.error('[LateTaskJob] ERROR: Luxon DateTime is invalid', { planDt: planDt.toISO?.(), dt: dt.toISO?.(), tz, hh, mm, ss });
                   }
@@ -146,23 +116,16 @@ async function checkLateTasksOnce() {
                 scheduledDate = new Date(plan.date.getFullYear(), plan.date.getMonth(), plan.date.getDate(), hh, mm, ss, 0);
               }
             } else if (LATE_JOB_VERBOSE) {
-              console.log('[LateTaskJob][VERBOSE] startAtString did not match HH:mm pattern', { startAtString: task.startAtString });
             }
           }
           if (!scheduledDate && task.startAt) {
             scheduledDate = new Date(task.startAt);
-            if (LATE_JOB_VERBOSE) {
-              console.log('[LateTaskJob][VERBOSE] using task.startAt as fallback', { startAt: task.startAt, scheduledDate: scheduledDate?.toISOString?.() });
-            }
+
           }
-          if (LATE_JOB_VERBOSE) {
-            console.log('[LateTaskJob][VERBOSE] computed scheduledDate', { scheduledDate: scheduledDate?.toISOString?.(), planDate: plan.date?.toISOString?.(), defaultNotifyTZ });
-          }
+
           // Validate that we have a valid scheduledDate
           if (!scheduledDate || isNaN(scheduledDate.getTime())) {
-            if (LATE_JOB_VERBOSE) {
-              console.log('[LateTaskJob][VERBOSE] skipping task - invalid scheduledDate', { taskId: task._id, scheduledDate });
-            }
+
             continue;
           }
 
@@ -175,29 +138,11 @@ async function checkLateTasksOnce() {
 
           // Compute cutoff using scheduledDate (absolute time representing the intended wall-clock)
           const cutoff = new Date(scheduledDate.getTime() + GRACE_MINUTES * 60 * 1000);
-          if (LATE_JOB_VERBOSE) {
-            console.log('[LateTaskJob][VERBOSE] cutoff/now comparison', { 
-              cutoff: cutoff.toISOString(), 
-              now: now.toISOString(), 
-              graceMinutes: GRACE_MINUTES, 
-              shiftMinutes,
-              isLate: cutoff <= now,
-              taskId: task._id,
-              taskName: task.name
-            });
-          }
+
           if (cutoff <= now) {
             // Task is late - send notifications
-            console.log('[LateTaskJob] Task is late and notification will be sent', {
-              taskId: task._id,
-              taskName: task.name,
-              userName,
-              scheduledDate: scheduledDate.toISOString(),
-              cutoff: cutoff.toISOString(),
-              now: now.toISOString(),
-              graceMinutes: GRACE_MINUTES
-            });
-            
+
+
             // Mark notified locally to avoid duplicate notifications
             task.lateNotified = true;
             modified = true;
@@ -209,21 +154,18 @@ async function checkLateTasksOnce() {
             const empMsg = `أنت متأخر عن المهمة "${task.name || 'مهمة'}" المقررة في ${plannedAtStr}`;
             try {
               if (!userId) {
-                console.warn('[LateTaskJob] skipping employee notification because userId is falsy', { planId: plan._id, assign, taskId: task._id });
               } else {
                 await NotificationService.createForUser(empMsg, userId, { taskId: task._id, planId: plan._id });
-               }
-             } catch (e) {
-               console.error('[LateTaskJob] failed to create employee notification', e);
-             }
+              }
+            } catch (e) {
+            }
 
             // Admin notification (Arabic) with employee and task details targeted to role 'admin'
             const adminMsg = `${userName} متأخر عن المهمة "${task.name || 'مهمة'}" (المقررة ${plannedAtStr})`;
             try {
               await NotificationService.createForRole(adminMsg, 'admin', { taskId: task._id, planId: plan._id, userId });
-             } catch (e) {
-               console.error('[LateTaskJob] failed to create admin notification', e);
-             }
+            } catch (e) {
+            }
 
             // Emit socket events to connected clients so UIs can react in real time
             try {
@@ -235,7 +177,6 @@ async function checkLateTasksOnce() {
               }
             } catch (e) {
               // ignore socket errors
-              console.error('[LateTaskJob] socket emit failed', e);
             }
           }
         }
@@ -245,7 +186,6 @@ async function checkLateTasksOnce() {
         try {
           await plan.save();
         } catch (e) {
-          console.error('[LateTaskJob] failed to save updated plan', e);
         }
       }
 
@@ -253,7 +193,6 @@ async function checkLateTasksOnce() {
       await new Promise((r) => setTimeout(r, 0));
     }
   } catch (err) {
-    console.error('[LateTaskJob] unexpected error', err);
   }
 }
 

@@ -129,7 +129,7 @@ class WorkDayPlanService {
               const mm = String(dd.getMinutes()).padStart(2, '0');
               rawStartAtString = `${hh}:${mm}`;
             }
-          } catch {}
+          } catch { }
         }
         // Compute startAt: prefer explicit startAt value if provided. If only startAtString exists,
         // convert it into an absolute UTC Date using Luxon and the configured NOTIFY_TZ (or UTC).
@@ -178,6 +178,49 @@ class WorkDayPlanService {
 
     // Helper to normalize user id to string
     const uid = (u: any) => (u && (u._id || u)).toString();
+
+    // VALIDATION: Ensure no started tasks are deleted or have their start time modified
+    for (const oldAssign of oldAssignments) {
+      const userId = uid(oldAssign.user);
+      const newAssign = normalizedAssignments.find((a: any) => uid(a.user) === userId);
+
+      // If the whole user assignment is missing, check if they had any started tasks
+      if (!newAssign) {
+        const startedTask = (oldAssign.tasks || []).find((t: any) => t.startTime);
+        if (startedTask) {
+          throw new Error(`Cannot remove assignment for user ${userId} because they have started tasks.`);
+        }
+        continue;
+      }
+
+      const oldTasks = oldAssign.tasks || [];
+      const newTasks = newAssign.tasks || [];
+
+      for (const oldTask of oldTasks) {
+        // If task hasn't started, we don't care if it's deleted or modified
+        if (!oldTask.startTime) continue;
+
+        // Try to find this task in the new list
+        // 1. Match by _id if available
+        let newTask = newTasks.find((t: any) => t._id && t._id.toString() === oldTask._id.toString());
+
+        // 2. If not found by ID, try to match by exact properties (heuristic fallback)
+        // This is tricky because if the client sends new objects without IDs, we might lose track.
+        // Ideally, clients should preserve IDs. If we can't find it by ID, we assume it's being deleted.
+        if (!newTask) {
+          throw new Error(`Cannot delete task '${oldTask.name}' because it has already started.`);
+        }
+
+        // Check if start time is modified
+        // We compare the time values. Note: new start time might be a Date object or null/undefined
+        const oldTime = oldTask.startTime.getTime();
+        const newTime = newTask.startTime ? new Date(newTask.startTime).getTime() : null;
+
+        if (newTime !== oldTime) {
+          throw new Error(`Cannot modify start time for task '${oldTask.name}' because it has already started.`);
+        }
+      }
+    }
 
     for (const newAssign of normalizedAssignments || []) {
       const newUserId = uid(newAssign.user);
@@ -389,7 +432,16 @@ class WorkDayPlanService {
 
     // Apply updates to the task
     if (updates.startTime !== undefined) {
-      oldTask.startTime = parseDateOrTimeOnPlanDate(updates.startTime);
+      const newStartTime = parseDateOrTimeOnPlanDate(updates.startTime);
+      // If task already has a start time, prevent changing it
+      if (oldTask.startTime) {
+        const oldTime = oldTask.startTime.getTime();
+        const newTime = newStartTime ? newStartTime.getTime() : null;
+        if (oldTime !== newTime) {
+          throw new Error('Cannot modify start time of a task that has already started');
+        }
+      }
+      oldTask.startTime = newStartTime;
     }
     if (updates.endTime !== undefined) {
       oldTask.endTime = parseDateOrTimeOnPlanDate(updates.endTime);
