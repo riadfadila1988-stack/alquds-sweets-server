@@ -559,6 +559,175 @@ class WorkDayPlanService {
       assignment: updatedAssignment
     };
   }
+
+  async updateEmployeeTasks(date: string, userId: string, tasks: any[]): Promise<IWorkDayPlan> {
+    const d = new Date(date);
+    let plan = await WorkDayPlan.findOne({ date: d });
+
+    if (!plan) {
+      // Create if doesn't exist
+      plan = new WorkDayPlan({ date: d, assignments: [] });
+    }
+
+    // Helper: parse a value into a Date when possible (Same as in createOrUpdate)
+    // We duplicate it here to stay self-contained
+    const parseDateOrTimeOnPlanDate = (val: any) => {
+      if (val === undefined || val === null) return val;
+      if (val instanceof Date) return Number.isFinite(val.getTime()) ? val : val;
+      if (typeof val === 'number' && Number.isFinite(val)) {
+        const dd = new Date(val);
+        return Number.isFinite(dd.getTime()) ? dd : val;
+      }
+      if (typeof val === 'string') {
+        if (val.includes('T') || /\d{4}-\d{2}-\d{2}/.test(val)) {
+          const dd = new Date(val);
+          if (Number.isFinite(dd.getTime())) return dd;
+        }
+        const hhmm = /^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$/.exec(val);
+        if (hhmm) {
+          const hh = Number(hhmm[1]);
+          const mm = Number(hhmm[2]);
+          const ss = hhmm[3] ? Number(hhmm[3]) : 0;
+          if (hh >= 0 && hh < 24 && mm >= 0 && mm < 60 && ss >= 0 && ss < 60) {
+            const tz = process.env.NOTIFY_TZ || 'Asia/Jerusalem';
+            try {
+              const dt = DateTime.fromJSDate(d, { zone: tz }).set({ hour: hh, minute: mm, second: ss, millisecond: 0 });
+              if (dt.isValid) return dt.toJSDate();
+            } catch {
+              return new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm, ss, 0);
+            }
+          }
+        }
+        const dd2 = new Date(val);
+        if (Number.isFinite(dd2.getTime())) return dd2;
+      }
+      return val;
+    };
+
+    // Helper: Map common alternative names to server canonical names
+    const mapTaskNames = (t: any) => {
+      if (!t || typeof t !== 'object') return t;
+      const mapped: any = { ...t };
+      mapped.startAt = mapped.startAt ?? mapped.scheduledStart ?? mapped.scheduleAt ?? mapped.start_at ?? mapped.scheduled_start ?? mapped.scheduled_at ?? mapped.start;
+      mapped.startTime = mapped.startTime ?? mapped.startedAt ?? mapped.start_at_time ?? mapped.started_at ?? mapped.started_at_time ?? mapped.actualStart;
+      mapped.endTime = mapped.endTime ?? mapped.endedAt ?? mapped.end_at_time ?? mapped.ended_at ?? mapped.actualEnd;
+      return mapped;
+    };
+
+    // Normalize incoming tasks
+    const normalizedNewTasks = (tasks || []).map((t: any) => {
+      const mapped = mapTaskNames(t);
+      let rawStartAtString: any = undefined;
+      if (mapped.startAtString !== undefined && mapped.startAtString !== null) {
+        rawStartAtString = mapped.startAtString;
+      } else if (typeof mapped.startAt === 'string') {
+        rawStartAtString = mapped.startAt;
+      } else if (mapped.startAt) {
+        try {
+          const dd = new Date(mapped.startAt);
+          if (!Number.isNaN(dd.getTime())) {
+            const hh = String(dd.getHours()).padStart(2, '0');
+            const mm = String(dd.getMinutes()).padStart(2, '0');
+            rawStartAtString = `${hh}:${mm}`;
+          }
+        } catch { }
+      }
+
+      let computedStartAt = undefined;
+      if (mapped.startAt) {
+        computedStartAt = parseDateOrTimeOnPlanDate(mapped.startAt);
+      } else if (mapped.startAtString) {
+        const m = /^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$/.exec(mapped.startAtString);
+        if (m) {
+          const hh = Number(m[1]);
+          const mm = Number(m[2]);
+          const ss = m[3] ? Number(m[3]) : 0;
+          const tz = ((mapped as any).timezone) || process.env.NOTIFY_TZ || 'Asia/Jerusalem';
+          try {
+            const planDt = DateTime.fromJSDate(d, { zone: tz });
+            const dt = planDt.set({ hour: hh, minute: mm, second: ss, millisecond: 0 });
+            if (dt.isValid) computedStartAt = dt.toJSDate();
+          } catch {
+            computedStartAt = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm, ss, 0);
+          }
+        }
+      }
+
+      return {
+        ...mapped,
+        startAtString: rawStartAtString,
+        startAt: computedStartAt,
+        startTime: parseDateOrTimeOnPlanDate(mapped && mapped.startTime),
+        endTime: parseDateOrTimeOnPlanDate(mapped && mapped.endTime),
+      };
+    });
+
+    const uid = (u: any) => (u && (u._id || u)).toString();
+    const existingAssignments = plan.assignments || [];
+    const assignmentIndex = existingAssignments.findIndex((a: any) => uid(a.user) === userId);
+
+    let finalTasks: any[] = [];
+
+    if (assignmentIndex === -1) {
+      // User assignment didn't exist, just add new tasks
+      // But wait.. does the user have any "phantom" started tasks? No, because assignment didn't exist.
+      finalTasks = normalizedNewTasks;
+      // Add new assignment
+      plan.assignments.push({ user: userId, tasks: finalTasks });
+    } else {
+      const existingAssignment = existingAssignments[assignmentIndex];
+      const existingTasks = existingAssignment.tasks || [];
+
+      // Logic: Preserve started tasks from existingTasks
+      // 1. Identify "started" tasks in existingTasks
+      // 2. Identify "not started" tasks in existingTasks (these can be deleted/modified)
+      // 3. For each started task: ensure it exists in the final list, exactly as it is in DB (or slightly updated if we allow non-critical updates? user said "keep it as is")
+      //    User said: "if task has startTime and trying delete or update continue keep it as is and continue to the next task"
+      //    This implies we should use the DB version for started tasks.
+
+      const startedTasks = existingTasks.filter((t: any) => t.startTime);
+
+      finalTasks = [...normalizedNewTasks];
+
+      // Restore started tasks that might have been deleted or modified
+      for (const startedTask of startedTasks) {
+        const startedTaskId = startedTask._id ? startedTask._id.toString() : null;
+
+        if (startedTaskId) {
+          const idx = finalTasks.findIndex((t: any) => t._id && t._id.toString() === startedTaskId);
+
+          if (idx !== -1) {
+            // Task exists in incoming list.
+            // Replace it with the DB version to ensure "keep it as is"
+            // Or maybe strictly prevent changes to critical fields?
+            // User said "update tasks ... not send full plan ... make sure can not delete or update task have startTime"
+            // "keep it as is" -> strongest interpretation is to ignore client changes to this task completely.
+            finalTasks[idx] = startedTask;
+          } else {
+            // Task was deleted in incoming list.
+            // Restore it.
+            // Where to put it? Maybe append it, or try to keep position?
+            // Appending is safest.
+            finalTasks.push(startedTask);
+          }
+        } else {
+          // Started task has no ID? That's weird for a persisted task. 
+          // If so, we might have trouble matching. But usually persisted tasks have _id.
+          // If we can't match by ID, we might double up if we just append.
+          // But existing system seems to rely on _id.
+          // Fallback: if no ID, we can't reliably track it, so we might just have to keep it.
+          finalTasks.push(startedTask);
+        }
+      }
+
+      // Update the assignment in the plan
+      existingAssignments[assignmentIndex].tasks = finalTasks;
+    }
+
+    // Save
+    return await plan.save();
+  }
+
 }
 
 export default new WorkDayPlanService();

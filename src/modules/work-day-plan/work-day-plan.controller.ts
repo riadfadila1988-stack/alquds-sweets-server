@@ -86,6 +86,22 @@ class WorkDayPlanController extends BaseController {
       this.handleError(res, e.message || 'Failed to update user task');
     }
   }
+
+  async updateEmployeeTasks(req: Request, res: Response) {
+    try {
+      const { date, userId, tasks } = req.body;
+
+      if (!date) return this.handleError(res, 'Missing date in body');
+      if (!userId) return this.handleError(res, 'Missing userId in body');
+      // tasks can be empty array, so checks strictly for undefined/null is better if we want to allow clearing tasks
+      if (!tasks || !Array.isArray(tasks)) return this.handleError(res, 'Missing tasks array in body');
+
+      const data = await this.service.updateEmployeeTasks(date, userId, tasks);
+      this.handleSuccess(res, data);
+    } catch (e: any) {
+      this.handleError(res, e.message || 'Failed to update employee tasks');
+    }
+  }
 }
 
 export default new WorkDayPlanController();
