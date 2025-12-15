@@ -22,7 +22,32 @@ class MaterialController {
 
     async updateMaterial(req: Request, res: Response) {
         try {
-            const material = await MaterialService.updateMaterial(req.params.id, req.body);
+            const user = (req as any).user; // From JWT middleware
+
+            const material = await MaterialService.updateMaterial(
+                req.params.id,
+                req.body,
+                user?.userId || user?.id,
+                user?.name
+            );
+            res.status(200).json(material);
+        } catch (error: any) {
+            res.status(500).json({ message: error.message });
+        }
+    }
+
+    async updateMaterialQuantity(req: Request, res: Response) {
+        try {
+            const { quantity } = req.body;
+            const user = (req as any).user; // From JWT middleware
+
+            const material = await MaterialService.updateMaterialQuantity(req.params.id, {
+                quantity,
+                userId: user?.userId || user?.id,
+                userName: user?.name
+            });
+
+            if (!material) return res.status(404).json({ message: 'Material not found' });
             res.status(200).json(material);
         } catch (error: any) {
             res.status(500).json({ message: error.message });
@@ -40,4 +65,3 @@ class MaterialController {
 }
 
 export default new MaterialController();
-
